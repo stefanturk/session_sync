@@ -76,6 +76,40 @@ def test_version_line_shows_both_versions():
     assert model.version_line == "Latest version: v25      You have: v23"
 
 
+# --- the header status word ----------------------------------------------
+
+
+def test_the_header_states_where_you_stand_in_two_words():
+    assert screen(make_status("up_to_date"), project_name="X").state_label == "UP TO DATE"
+
+
+def test_the_header_counts_the_versions_you_are_missing():
+    model = screen(make_status("behind", local=23, remote=25), project_name="X")
+    assert model.state_label == "2 VERSIONS BEHIND"
+
+
+def test_the_header_says_pull_required_when_behind_blocks_a_push():
+    status = make_status("push_blocked", local=24, remote=25, added={"a": "a"})
+    assert screen(status, project_name="X").state_label == "PULL REQUIRED"
+
+
+def test_the_header_names_unpushed_work():
+    status = make_status("local_changes", added={"a": "a"})
+    assert screen(status, project_name="X").state_label == "UNPUSHED WORK"
+
+
+def test_an_open_session_is_stated_in_the_header():
+    model = screen(make_status("up_to_date"), project_name="X", session_open=True)
+    assert model.state_label == "SESSION OPEN"
+
+
+def test_an_open_session_never_hides_that_you_are_behind():
+    model = screen(
+        make_status("behind", local=1, remote=2), project_name="X", session_open=True
+    )
+    assert model.state_label == "1 VERSION BEHIND"
+
+
 # --- the buttons ---------------------------------------------------------
 
 

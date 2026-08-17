@@ -23,7 +23,9 @@ create them yet.
 
 | File | Responsibility |
 |---|---|
-| `presenter.py` | **What the window says** — banner, button states, notification-worthy news. No Qt, fully unit tested. |
+| `presenter.py` | **What the window says** — banner, header status, button states, notification-worthy news. No Qt, fully unit tested. |
+| `theme.py` | The palette and the whole stylesheet, in one place. |
+| `widgets.py` | The indicator light — the one thing a stylesheet cannot express. |
 | `engine.py` | The `Repository`, on its own thread. Everything is serialised through it. |
 | `window.py` | Layout and wiring only. |
 | `settings.py` | Recent projects, in `~/.sessionsync/ui.json`. |
@@ -38,31 +40,55 @@ leaves it — which also means a background refresh can never run inside a push.
 The window talks to it only through signals, which Qt queues across the thread
 boundary.
 
+## The look
+
+Borrowed from Beat Thief, which sits open next to Ableton all day and is built
+as a piece of hardware rather than a web page: dark panel, silkscreen section
+labels, an indicator light, and one lit call-to-action. Avenir Next, which
+ships with macOS, so nothing is fetched and nothing falls back to Helvetica.
+
+The single addition is amber. Beat Thief only needed good/bad; *behind* is
+neither — not an error, but a stop-and-pull-first — and it has to be
+distinguishable at a glance from having unpushed work.
+
+Two Qt traps worth remembering:
+
+- `QLabel` is a `QFrame`, so an unqualified `QFrame { border… }` rule puts a
+  border around every label inside the frame. Select by object name.
+- A stylesheet `color` on `QTreeWidget::item` beats `setForeground`, so the
+  per-row colour coding silently does nothing.
+
 ## The window
 
 ```
-Take My Heart Example Project
+  PROJECT                                    ● UNPUSHED WORK
+  Midnight Drive                       Latest: v1   You have: v1
+ ─────────────────────────────────────────────────────────────
+  ┌───────────────────────────────────────────────────────────┐
+  │ You have work that has not been pushed yet.               │
+  │ ●  Alice has been working since 10:56 PM.                 │
+  │ ⚠  1 audio file lives outside this project folder…        │
+  └───────────────────────────────────────────────────────────┘
 
-  Latest version: v3      You have: v3
-  ┌──────────────────────────────────────────────────────────┐
-  │ You have work that has not been pushed yet.              │
-  └──────────────────────────────────────────────────────────┘
-  ●  Alice has been working since 8:02 PM.
-  ⚠  1 audio file lives outside this project folder…
+  [ PULL LATEST ] [ START SESSION ] [ REVIEW CHANGES ] [ PUSH SESSION ]
 
-  [ Pull Latest ] [ Start Session ] [ Review Changes ] [ PUSH SESSION ]
+  CHANGES              Project 61.1 MB · Stored 28.5 MB · Upload 32.6 MB
+  ┌───────────────────────────────────────────────────────────┐
+  │ CHANGE    FILE                                      SIZE  │
+  │ ADDED     Samples/Recorded/Sax Overdub.aif       32.6 MB  │
+  └───────────────────────────────────────────────────────────┘
 
-  Change     File                            Size
-  Modified   Take My Heart.als             95.1 KB
-
-  Project: 458.7 MB    Already stored: 458.7 MB    To upload: 0 B
-  Last push: v3 — 16 Aug 2026, 10:08 PM — Guitar overdub
+  Last push: v1 — 16 Aug 2026, 10:56 PM — Rhodes and a vocal take
 ```
 
 Rules the tests hold to:
 
 - **The banner is the loudest element**, coloured by severity, and being behind
-  outranks having unpushed work.
+  outranks having unpushed work. The header light and status word carry the
+  same colour, so the state is readable from across a desk.
+- **The light pulses only when someone else is pushing.** That is the one thing
+  worth catching out of the corner of your eye — a status word that merely
+  changes is easy to miss when you glance over from Ableton.
 - **Exactly one button is the recommended action** and it is drawn in blue.
   Catching up always outranks publishing, so `pull` wins over `push`.
 - **Buttons are disabled, never hidden**, and a disabled button always says why

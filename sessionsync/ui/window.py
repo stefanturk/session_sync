@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QDesktopServices
+from PySide6.QtGui import QAction, QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -38,27 +38,26 @@ from sessionsync.core.errors import (
     StalePushError,
 )
 from sessionsync.core.session import HEARTBEAT_SECONDS
+from sessionsync.ui import theme
 from sessionsync.ui.engine import Engine, Snapshot
 from sessionsync.ui.notify import notify
 from sessionsync.ui.presenter import human_size, local_time, notifications, screen
 from sessionsync.ui.settings import Settings
+from sessionsync.ui.widgets import Led
 
 REFRESH_MS = 60_000
 
-BANNER_COLOURS = {
-    "ok": ("#1f5c34", "#d6f0de"),
-    "info": ("#1f4a6b", "#d8ecfa"),
-    "warning": ("#8a5a00", "#ffeccc"),
-    "danger": ("#7d1f1f", "#ffdcdc"),
+CHANGE_COLOURS = {
+    "Added": theme.GOOD,
+    "Modified": theme.VIOLET,
+    "Removed": theme.BAD,
 }
 
-PRIMARY_BUTTON = """
-QPushButton { background: #2f6fd0; color: white; border: none;
-              border-radius: 7px; font-weight: 600; }
-QPushButton:hover  { background: #2a63bb; }
-QPushButton:pressed { background: #24549e; }
-QPushButton:disabled { background: palette(button); color: palette(mid); }
-"""
+
+def _silkscreen(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setObjectName("silkscreen")
+    return label
 
 
 class MainWindow(QMainWindow):
@@ -78,83 +77,155 @@ class MainWindow(QMainWindow):
         self.snapshot: Snapshot | None = None
 
         self.setWindowTitle(f"SessionSync — {Path(project_root).name}")
-        self.resize(760, 560)
+        self.resize(860, 620)
+        self.setMinimumSize(680, 520)
         self._build()
         self._start_engine(project_root)
 
     # --- construction ----------------------------------------------------
 
     def _build(self) -> None:
+        self.setStyleSheet(theme.STYLESHEET)
+
         central = QWidget()
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(28, 24, 28, 20)
-        layout.setSpacing(14)
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(self._header())
 
+        body = QVBoxLayout()
+        body.setContentsMargins(24, 20, 24, 18)
+        body.setSpacing(18)
+        outer.addLayout(body, stretch=1)
+
+        body.addWidget(self._standing())
+        body.addWidget(self._actions())
+        body.addLayout(self._change_list(), stretch=1)
+
+        self.last_push_label = QLabel()
+        self.last_push_label.setObjectName("lastPush")
+        body.addWidget(self.last_push_label)
+
+        self.setCentralWidget(central)
+        self.statusBar().showMessage("Opening project…")
+
+        self._build_menu()
+
+    # --- the pieces ------------------------------------------------------
+
+    def _header(self) -> QFrame:
+        """Project name on the left, indicator light and status on the right."""
+        header = QFrame()
+        header.setObjectName("header")
+        row = QHBoxLayout(header)
+        row.setContentsMargins(24, 16, 24, 14)
+        row.setSpacing(12)
+
+        left = QVBoxLayout()
+        left.setSpacing(2)
+        left.addWidget(_silkscreen("PROJECT"))
         self.title_label = QLabel()
-        self.title_label.setStyleSheet("font-size: 26px; font-weight: 600;")
-        layout.addWidget(self.title_label)
+        self.title_label.setObjectName("projectName")
+        left.addWidget(self.title_label)
+        row.addLayout(left)
+        row.addStretch(1)
 
+        self.led = Led()
+        self.state_label = QLabel()
+        self.state_label.setObjectName("stateLabel")
+        indicator = QHBoxLayout()
+        indicator.setSpacing(7)
+        indicator.addWidget(self.led)
+        indicator.addWidget(self.state_label)
+        right = QVBoxLayout()
+        right.setSpacing(4)
+        right.addStretch(1)
+        right.addLayout(indicator)
         self.version_label = QLabel()
-        self.version_label.setStyleSheet("font-size: 13px; color: palette(mid);")
-        layout.addWidget(self.version_label)
+        self.version_label.setObjectName("versions")
+        self.version_label.setAlignment(Qt.AlignRight)
+        right.addWidget(self.version_label)
+        row.addLayout(right)
+        return header
+
+    def _standing(self) -> QFrame:
+        """The readout: where you stand, who else is here, what would not travel."""
+        self.banner_frame = QFrame()
+        # QLabel is itself a QFrame, so this must be selected by name — an
+        # unqualified QFrame rule puts a border around every label inside it.
+        self.banner_frame.setObjectName("standing")
+        column = QVBoxLayout(self.banner_frame)
+        column.setContentsMargins(16, 14, 16, 14)
+        column.setSpacing(8)
 
         self.banner = QLabel()
         self.banner.setWordWrap(True)
-        self.banner.setFrameShape(QFrame.StyledPanel)
-        layout.addWidget(self.banner)
+        column.addWidget(self.banner)
 
         self.presence_label = QLabel()
+        self.presence_label.setObjectName("presence")
         self.presence_label.setWordWrap(True)
-        self.presence_label.setStyleSheet("font-size: 13px;")
-        layout.addWidget(self.presence_label)
+        column.addWidget(self.presence_label)
 
         self.media_label = QLabel()
         self.media_label.setWordWrap(True)
-        self.media_label.setStyleSheet("font-size: 12px; color: #8a5a00;")
-        self.media_label.setCursor(Qt.PointingHandCursor)
-        layout.addWidget(self.media_label)
+        self.media_label.setStyleSheet(f"color: {theme.WARN}; font-size: 11.5px;")
+        column.addWidget(self.media_label)
+        return self.banner_frame
 
-        buttons = QHBoxLayout()
-        buttons.setSpacing(10)
+    def _actions(self) -> QWidget:
+        row = QWidget()
+        buttons = QHBoxLayout(row)
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(9)
+
         self.pull_button = QPushButton()
         self.session_button = QPushButton()
         self.review_button = QPushButton()
         self.push_button = QPushButton()
-        for button in (self.pull_button, self.session_button, self.review_button, self.push_button):
-            button.setMinimumHeight(38)
+        for button in self._buttons():
+            button.setMinimumHeight(42)
+            button.setCursor(Qt.PointingHandCursor)
             buttons.addWidget(button)
-        layout.addLayout(buttons)
 
         self.pull_button.clicked.connect(lambda: self.request_pull.emit(False))
         self.session_button.clicked.connect(self._toggle_session)
         self.review_button.clicked.connect(self.request_review.emit)
         self.push_button.clicked.connect(self._ask_for_note_and_push)
+        return row
+
+    def _change_list(self) -> QVBoxLayout:
+        column = QVBoxLayout()
+        column.setSpacing(8)
+
+        heading = QHBoxLayout()
+        heading.addWidget(_silkscreen("CHANGES"))
+        heading.addStretch(1)
+        self.summary_label = QLabel()
+        self.summary_label.setObjectName("summary")
+        heading.addWidget(self.summary_label)
+        column.addLayout(heading)
 
         self.changes = QTreeWidget()
-        self.changes.setHeaderLabels(["Change", "File", "Size"])
+        self.changes.setHeaderLabels(["CHANGE", "FILE", "SIZE"])
         self.changes.setRootIsDecorated(False)
         self.changes.setUniformRowHeights(True)
         self.changes.setFrameShape(QFrame.NoFrame)
         self.changes.setSelectionMode(QTreeWidget.NoSelection)
         self.changes.setFocusPolicy(Qt.NoFocus)
-        self.changes.setColumnWidth(0, 90)
+        self.changes.setColumnWidth(0, 100)
         self.changes.header().setStretchLastSection(False)
         self.changes.header().setSectionResizeMode(1, QHeaderView.Stretch)
         self.changes.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.changes.setStyleSheet("QTreeWidget { font-size: 12px; }")
-        layout.addWidget(self.changes, stretch=1)
+        column.addWidget(self.changes, stretch=1)
 
-        self.summary_label = QLabel()
-        self.summary_label.setStyleSheet("font-size: 12px; color: palette(mid);")
-        layout.addWidget(self.summary_label)
+        self.nothing_changed = QLabel("Nothing has changed since your last push.")
+        self.nothing_changed.setObjectName("summary")
+        self.nothing_changed.setAlignment(Qt.AlignCenter)
+        column.addWidget(self.nothing_changed, stretch=1)
+        return column
 
-        self.last_push_label = QLabel()
-        self.last_push_label.setStyleSheet("font-size: 12px; color: palette(mid);")
-        layout.addWidget(self.last_push_label)
-
-        self.setCentralWidget(central)
-        self.statusBar().showMessage("Opening project…")
-
+    def _build_menu(self) -> None:
         history = QAction("Project &History…", self)
         history.triggered.connect(self.request_history.emit)
         open_project = QAction("&Open Project…", self)
@@ -213,12 +284,26 @@ class MainWindow(QMainWindow):
 
         self.title_label.setText(model.title)
         self.version_label.setText(model.version_line)
+        self.state_label.setText(model.state_label)
 
-        fg, bg = BANNER_COLOURS[model.banner.level]
+        accent, fill = theme.level_colours(model.banner.level)
+        self.state_label.setStyleSheet(
+            f"color: {accent}; font-size: 10px; font-weight: 600; letter-spacing: 2px;"
+        )
+        self.led.set_colour(accent)
+        # Someone else pushing is the one thing you want to catch out of the
+        # corner of your eye, since pushing over it is what wastes a take.
+        self.led.set_pulsing(
+            any(s.get("state") == "pushing" for s in snapshot.status.active_sessions)
+        )
+
         self.banner.setText(model.banner.text)
         self.banner.setStyleSheet(
-            f"background: {bg}; color: {fg}; border-radius: 8px;"
-            "padding: 14px 16px; font-size: 16px; font-weight: 600;"
+            f"color: {accent}; font-size: 15px; font-weight: 600; background: transparent;"
+        )
+        self.banner_frame.setStyleSheet(
+            f"QFrame#standing {{ background: {fill}; border: 1px solid {accent};"
+            f" border-radius: {theme.RADIUS}px; }}"
         )
 
         self.presence_label.setText(
@@ -237,8 +322,14 @@ class MainWindow(QMainWindow):
 
         self.changes.clear()
         for kind, path, size in model.changes:
-            self.changes.addTopLevelItem(QTreeWidgetItem([kind, path, size]))
+            item = QTreeWidgetItem([kind.upper(), path, size])
+            item.setForeground(0, QColor(CHANGE_COLOURS.get(kind, theme.DIM)))
+            item.setForeground(1, QColor(theme.INK))
+            item.setForeground(2, QColor(theme.DIM))
+            item.setTextAlignment(2, Qt.AlignRight | Qt.AlignVCenter)
+            self.changes.addTopLevelItem(item)
         self.changes.setVisible(bool(model.changes))
+        self.nothing_changed.setVisible(not model.changes)
 
         self.summary_label.setText(model.summary)
         self.last_push_label.setText(model.last_push)
@@ -266,12 +357,15 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _apply(button: QPushButton, state, *, primary: bool = False) -> None:
-        button.setText(state.label)
+        button.setText(state.label.upper())
         button.setEnabled(state.enabled)
         button.setToolTip(state.reason)
-        button.setProperty("primary", primary)
         button.setDefault(primary)
-        button.setStyleSheet(PRIMARY_BUTTON if primary else "")
+        if button.property("primary") != primary:
+            button.setProperty("primary", primary)
+            # Qt only re-reads a property selector when told the style is stale.
+            button.style().unpolish(button)
+            button.style().polish(button)
 
     def _busy_changed(self, message: str) -> None:
         """A push or a pull: nothing else should be clickable while it runs."""

@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox
 
 from sessionsync.auth.identity import IdentityNotSetError, load_identity, save_identity
@@ -30,6 +31,12 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication([sys.argv[0] if sys.argv else "sessionsync"])
     app.setApplicationName("SessionSync")
     app.setApplicationDisplayName("SessionSync")
+    # The window is dark whatever the system is set to, so ask for the dark
+    # appearance — otherwise macOS draws a light title bar around it.
+    try:
+        app.styleHints().setColorScheme(Qt.ColorScheme.Dark)
+    except AttributeError:  # older Qt; the window is still dark, the frame is not
+        pass
 
     if not _ensure_identity():
         return 1

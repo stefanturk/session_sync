@@ -42,6 +42,8 @@ class Screen:
     last_push: str = ""
     #: name of the one button to draw attention to — "" when nothing is pressing.
     primary: str = ""
+    #: short uppercase status for the header, next to the indicator light.
+    state_label: str = ""
 
 
 PULL_FIRST = "Pull latest first."
@@ -80,7 +82,19 @@ def screen(
         summary=_summary(status),
         last_push=_last_push(last_push),
         primary=_primary(status.state, session_open),
+        state_label=_state_label(status.state, behind, session_open),
     )
+
+
+def _state_label(state: str, behind: int, session_open: bool) -> str:
+    """Two or three words for the header. Being behind outranks everything."""
+    if state == "behind":
+        return f"{behind} VERSION{'S' if behind != 1 else ''} BEHIND"
+    if state == "push_blocked":
+        return "PULL REQUIRED"
+    if state == "local_changes":
+        return "UNPUSHED WORK"
+    return "SESSION OPEN" if session_open else "UP TO DATE"
 
 
 def _primary(state: str, session_open: bool) -> str:

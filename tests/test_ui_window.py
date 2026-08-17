@@ -57,7 +57,7 @@ def test_a_freshly_pushed_project_reads_as_up_to_date(window, alice, identity):
 
     assert window.title_label.text() == "My Song"
     assert "Up to date" in window.banner.text()
-    assert window.session_button.text() == "Start Session"
+    assert window.session_button.text() == "START SESSION"
     assert not window.push_button.isEnabled()
 
 
