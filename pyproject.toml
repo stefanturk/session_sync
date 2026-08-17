@@ -5,10 +5,14 @@ description = "Pull, work, push — collaborative Ableton Live project sync"
 requires-python = ">=3.12"
 dependencies = [
     "typer>=0.12",
+    "PySide6>=6.7",
 ]
 
 [project.scripts]
 sessionsync = "sessionsync.cli:app"
+
+[project.gui-scripts]
+sessionsync-app = "sessionsync.ui.app:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

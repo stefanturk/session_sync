@@ -177,7 +177,7 @@ def status(project: Path = PROJECT_OPTION) -> None:
 
     diff = st.diff
     if diff.has_changes:
-        sizes = {p: e.size for p, e in repo.scan().items()}
+        sizes = diff.sizes
         _print_files("Added", diff.added, sizes)
         _print_files("Modified", diff.modified, sizes)
         _print_files("Deleted", diff.deleted)
@@ -197,9 +197,8 @@ def review(project: Path = PROJECT_OPTION) -> None:
         typer.echo("Nothing has changed yet.")
         return
 
-    sizes = {p: e.size for p, e in repo.scan().items()}
-    _print_files("Added", diff.added, sizes)
-    _print_files("Modified", diff.modified, sizes)
+    _print_files("Added", diff.added, diff.sizes)
+    _print_files("Modified", diff.modified, diff.sizes)
     _print_files("Deleted", diff.deleted)
     typer.echo(f"\nUpload: {human_size(diff.changed_bytes)}")
 

@@ -103,6 +103,17 @@ class TestDiff:
         assert d.modified_bytes == 0
         assert d.changed_bytes == 500
 
+    def test_carries_the_size_of_each_changed_file_so_nothing_needs_rehashing(self):
+        old = manifest_of(a=entry(b"old", "Bass.wav"))
+        new = manifest_of(
+            a=entry(b"x" * 300, "Bass.wav"),
+            b=entry(b"y" * 500, "Guitar.wav"),
+        )
+
+        d = diff_manifests(old, new)
+
+        assert d.sizes == {"Bass.wav": 300, "Guitar.wav": 500}
+
     def test_a_file_moved_to_a_new_path_is_added_and_deleted_not_modified(self):
         old = manifest_of(a=entry(b"audio", "Samples/Take.wav"))
         new = manifest_of(a=entry(b"audio", "Samples/Take 1.wav"))

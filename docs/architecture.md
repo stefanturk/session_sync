@@ -3,7 +3,7 @@
 Six layers, each replaceable without touching the others.
 
 ```
-CLI (sessionsync/cli.py)          →  later: PySide6 window, same engine
+CLI (cli.py) and window (ui/)     →  two front ends, one engine
   Repository engine (core/)       →  pull, work, push; version rules; local safety
     DAW adapter (adapters/)       →  what counts as "the project"
     Storage provider (storage/)   →  where the bytes live

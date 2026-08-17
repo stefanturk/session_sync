@@ -122,6 +122,9 @@ class ManifestDiff:
     unchanged: list[str]
     added_bytes: int
     modified_bytes: int
+    #: size of every added or modified file, so callers can show a change list
+    #: without rescanning the project.
+    sizes: dict[str, int] = field(default_factory=dict)
 
     @property
     def changed_bytes(self) -> int:
@@ -155,4 +158,5 @@ def diff_file_maps(
         unchanged=unchanged,
         added_bytes=sum(new[p].size for p in added),
         modified_bytes=sum(new[p].size for p in modified),
+        sizes={p: new[p].size for p in added + modified},
     )

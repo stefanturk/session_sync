@@ -1,72 +1,84 @@
 # Step 6 — the Mac app
 
-## State of play
+## Running it
 
-Steps 1–4 are done: engine, folder-based storage, CLI, 163 passing tests
-(`.venv/bin/python -m pytest`). Google Drive (Step 5) is deliberately deferred —
-the GUI works against a folder remote today. See `architecture.md` and
-`repository_format.md`.
-
-Python 3.12 venv at `.venv/`. Test project:
-`~/Desktop/SessionSync Test/Take My Heart Example Project` (real Live 11 project,
-415 MB, already init'd and pushed to v3 against a scratchpad remote).
-
-## The engine API the window drives
-
-Nothing new needs building in `core/` — the window calls exactly what the CLI calls:
-
-```python
-repo = Repository.open(project_root, author=load_identity())
-st   = repo.status()      # .state, .local_version, .remote_version, .versions_behind,
-                          # .diff, .project_bytes, .upload_bytes, .already_stored_bytes,
-                          # .active_sessions, .has_local_changes
-repo.start_session(force=False)   # raises ProjectBehindError when behind
-repo.heartbeat(state="working"|"pushing")
-repo.end_session()
-repo.review()                     # ManifestDiff since session start
-repo.push(note=...)               # raises StalePushError / NothingToPushError
-repo.pull(replace_my_versions=False)  # raises LocalChangesWouldBeReplacedError
-repo.history()                    # list[VersionSummary], newest first
-repo.adapter.referenced_media(root)   # .inside / .outside / .missing
+```bash
+.venv/bin/python -m sessionsync.ui                    # last project, or a folder picker
+.venv/bin/python -m sessionsync.ui ~/Music/Ableton/My\ Song
 ```
 
-`status.state` is one of: `up_to_date`, `behind`, `local_changes`, `push_blocked`.
+Installed, that is `sessionsync-app`. A project must already be set up with
+`sessionsync init` — the window opens existing working copies, it does not
+create them yet.
+
+## How it is put together
+
+| File | Responsibility |
+|---|---|
+| `presenter.py` | **What the window says** — banner, button states, notification-worthy news. No Qt, fully unit tested. |
+| `engine.py` | The `Repository`, on its own thread. Everything is serialised through it. |
+| `window.py` | Layout and wiring only. |
+| `settings.py` | Recent projects, in `~/.sessionsync/ui.json`. |
+| `notify.py` | macOS notifications via `osascript`. |
+| `app.py` | Identity on first launch, then which project to open. |
+
+Two reasons the engine has its own thread: scanning a large project takes real
+time, and `Repository` owns SQLite connections, which belong to the thread that
+created them. So the repository is *created on* the engine thread and never
+leaves it — which also means a background refresh can never run inside a push.
+
+The window talks to it only through signals, which Qt queues across the thread
+boundary.
 
 ## The window
 
 ```
-My Song
+Take My Heart Example Project
 
-  Latest version: v25        You have: v23
-  ⚠  You are 2 versions behind — Pull latest before you start
-  ●  Alice has been working since 8:02 PM (from v25)
+  Latest version: v3      You have: v3
+  ┌──────────────────────────────────────────────────────────┐
+  │ You have work that has not been pushed yet.              │
+  └──────────────────────────────────────────────────────────┘
+  ●  Alice has been working since 8:02 PM.
+  ⚠  1 audio file lives outside this project folder…
 
-  [ PULL LATEST ]  [ START SESSION ]  [ REVIEW CHANGES ]  [ PUSH SESSION ]
+  [ Pull Latest ] [ Start Session ] [ Review Changes ] [ PUSH SESSION ]
 
-  Last push: 16 Aug 2026, 9:14 PM — 3 added / 512 MB
+  Change     File                            Size
+  Modified   Take My Heart.als             95.1 KB
+
+  Project: 458.7 MB    Already stored: 458.7 MB    To upload: 0 B
+  Last push: v3 — 16 Aug 2026, 10:08 PM — Guitar overdub
 ```
 
-Rules:
-- **Freshness banner is the loudest element**, not a status line. Behind → the
-  banner and Pull are what the eye lands on; Start Session is disabled.
-- Presence line whenever someone else is active.
-- Buttons enable/disable by `status.state`; never hide them.
-- Media warnings (audio outside the project) shown before a push, not after.
+Rules the tests hold to:
+
+- **The banner is the loudest element**, coloured by severity, and being behind
+  outranks having unpushed work.
+- **Exactly one button is the recommended action** and it is drawn in blue.
+  Catching up always outranks publishing, so `pull` wins over `push`.
+- **Buttons are disabled, never hidden**, and a disabled button always says why
+  in its tooltip.
+- **A background check does not grey the window out.** Only a push or a pull
+  does. Greying everything for several seconds each minute reads as a hang.
+- Media that would not travel is shown *before* a push, not after.
 
 ## Behaviour
 
-- Background refresh every 60 s: `repo.status()` off the UI thread, plus
-  `repo.heartbeat()` while a session is open. A `QThread`/worker — never block
-  the UI on a scan; a 6 GB project scan takes real time even with the hash cache.
-- Notify (macOS notification) when someone else starts or finishes a session,
-  and when the remote version changes while the window is open.
-- Long operations (push/pull) need a progress state and must not freeze the app.
-- Dialogs mirror the CLI's safety prompts: the pull-would-replace-my-work
-  confirmation, and the stale-push explanation.
+- Refresh every 60 s, heartbeat every 60 s while a session is open.
+- macOS notification when someone else starts working, starts pushing, finishes,
+  or when a new version appears — you will be inside Ableton, not looking here.
+- The first refresh after launch never notifies: everything is new when you open
+  the app, and being told so is noise.
+- Pull that would replace unpushed edits shows the same confirmation the CLI
+  does, naming the files, defaulting to keeping your work.
+- Stale push and "you are behind" are explained, not just refused.
 
-## Decisions still open
+## Still to do
 
-- Single-project window vs. a project list. Simplest first: one project, opened
-  from a folder picker, remembered in `~/.sessionsync/`.
-- Packaging (PyInstaller `.app`) can come after the window works when run with
-  `python -m sessionsync.ui`.
+- Packaging as a `.app` with PyInstaller.
+- Setting up a *new* project from the window (currently CLI only).
+- A project list instead of one window per project — the single-project window
+  is the whole workflow, so this is comfort, not capability.
+- Progress inside a long push/pull (currently a status message, no percentage) —
+  wants byte-level callbacks from `Repository.push`.
