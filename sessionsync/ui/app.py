@@ -13,16 +13,29 @@ from sessionsync.ui.settings import Settings
 from sessionsync.ui.window import MainWindow
 
 
+def project_argument(argv: list[str]) -> Path | None:
+    """The project folder asked for on the command line, if any.
+
+    A .app launched from Finder is handed a `-psn_0_12345` process serial
+    number, which must not be mistaken for a path.
+    """
+    for arg in argv:
+        if not arg.startswith("-"):
+            return Path(arg).expanduser()
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(argv if argv is not None else sys.argv[1:])
     app = QApplication([sys.argv[0] if sys.argv else "sessionsync"])
     app.setApplicationName("SessionSync")
+    app.setApplicationDisplayName("SessionSync")
 
     if not _ensure_identity():
         return 1
 
     settings = Settings()
-    project = Path(argv[0]).expanduser() if argv else settings.last_project()
+    project = project_argument(argv) or settings.last_project()
     if project is None or not LocalState.exists(project):
         project = _choose_project()
     if project is None:

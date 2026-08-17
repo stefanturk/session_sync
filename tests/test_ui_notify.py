@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sessionsync.ui.notify import notification_script
+from sessionsync.ui.notify import OSASCRIPT, notification_script
 
 
 def test_shows_the_message_under_the_project_name():
@@ -24,6 +24,11 @@ def test_a_quote_in_the_message_cannot_end_the_applescript_string():
 def test_a_backslash_is_escaped_before_the_quotes_are():
     script = notification_script(r"C:\path", title="X")
     assert r"C:\\path" in script
+
+
+def test_osascript_is_found_by_full_path():
+    """A double-clicked .app inherits a minimal PATH, so a bare name may not resolve."""
+    assert OSASCRIPT.startswith("/")
 
 
 def test_newlines_do_not_break_the_one_line_script():

@@ -16,6 +16,7 @@ sessionsync-app = "sessionsync.ui.app:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+package = ["pyinstaller>=6.6"]
 
 [build-system]
 requires = ["setuptools>=68"]

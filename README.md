@@ -14,7 +14,7 @@ before you start playing — not after two hours of takes.
 | Engine, manifests, hashing | done |
 | Folder-backed storage (a folder, external drive, NAS) | done |
 | CLI (`sessionsync`) | done |
-| PySide6 Mac app | done (not yet packaged as a `.app`) |
+| PySide6 Mac app, packaged as a `.app` | done |
 | Test suite, incl. crash and stale-push tests | 225 passing |
 | Google Drive backend | next |
 
@@ -22,7 +22,24 @@ Proven on a real 415 MB Live 11 project: byte-for-byte reconstruction of 103
 files, `Backup/` and `.asd` correctly ignored, and dedup taking a 34 MB "added"
 set down to 95 KB actually uploaded.
 
-## Try it
+## The app
+
+Build a double-clickable Mac app that needs no Python installed:
+
+```bash
+scripts/build_app.sh          # → dist/SessionSync.app  (about 100 MB)
+```
+
+Drag it to `/Applications`. It opens the last project you worked on, or asks
+for a folder. It is unsigned, so the first launch may need right-click → Open.
+
+For the `sessionsync` command without managing a virtualenv yourself:
+
+```bash
+pipx install .                # puts `sessionsync` on your PATH
+```
+
+## From source
 
 ```bash
 python3.12 -m venv .venv && .venv/bin/pip install -e .

@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -323,9 +323,7 @@ class MainWindow(QMainWindow):
 
     def _reveal(self) -> None:
         if self.snapshot:
-            import subprocess
-
-            subprocess.run(["open", str(self.snapshot.project_root)], check=False)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.snapshot.project_root)))
 
     # --- results ---------------------------------------------------------
 

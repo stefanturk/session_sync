@@ -9,6 +9,10 @@ from __future__ import annotations
 import subprocess
 import sys
 
+# Full paths: a double-clicked .app inherits a minimal PATH, so a bare command
+# name is not guaranteed to resolve the way it does in a shell.
+OSASCRIPT = "/usr/bin/osascript"
+
 
 def notification_script(message: str, *, title: str) -> str:
     """One line of AppleScript. Project names contain apostrophes and quotes."""
@@ -30,7 +34,7 @@ def notify(message: str, *, title: str = "SessionSync") -> None:
         return
     try:
         subprocess.run(
-            ["osascript", "-e", notification_script(message, title=title)],
+            [OSASCRIPT, "-e", notification_script(message, title=title)],
             check=False,
             capture_output=True,
             timeout=5,

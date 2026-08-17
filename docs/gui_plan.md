@@ -2,6 +2,14 @@
 
 ## Running it
 
+As an app, with no Python involved:
+
+```bash
+scripts/build_app.sh      # → dist/SessionSync.app, then drag it to /Applications
+```
+
+From source:
+
 ```bash
 .venv/bin/python -m sessionsync.ui                    # last project, or a folder picker
 .venv/bin/python -m sessionsync.ui ~/Music/Ableton/My\ Song
@@ -74,9 +82,27 @@ Rules the tests hold to:
   does, naming the files, defaulting to keeping your work.
 - Stale push and "you are behind" are explained, not just refused.
 
+## Packaging
+
+`packaging/SessionSync.spec` + `scripts/build_app.sh` produce a ~100 MB
+`dist/SessionSync.app`, ad-hoc signed so the Mac that built it will open it
+without the "damaged" dialog.
+
+Two things a bundled app does differently from a shell, both handled:
+
+- It inherits a minimal `PATH`, so `osascript` is called by full path and
+  "reveal in Finder" goes through `QDesktopServices` rather than `open`.
+- Finder passes a `-psn_0_12345` process serial number as an argument, which
+  must not be taken for a project folder.
+
+Most of the 100 MB is Qt. The spec excludes what a four-button window has no
+use for — WebEngine, Quick/QML, 3D, Multimedia, Charts.
+
+Not signed with a Developer ID and not notarised, so another Mac will warn on
+first launch. That needs a paid Apple developer account.
+
 ## Still to do
 
-- Packaging as a `.app` with PyInstaller.
 - Setting up a *new* project from the window (currently CLI only).
 - A project list instead of one window per project — the single-project window
   is the whole workflow, so this is comfort, not capability.
