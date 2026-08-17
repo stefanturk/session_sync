@@ -1,0 +1,24 @@
+[project]
+name = "sessionsync"
+version = "0.1.0"
+description = "Pull, work, push — collaborative Ableton Live project sync"
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.12",
+]
+
+[project.scripts]
+sessionsync = "sessionsync.cli:app"
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["sessionsync*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
