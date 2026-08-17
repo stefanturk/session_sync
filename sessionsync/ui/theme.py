@@ -199,6 +199,117 @@ QTextEdit {{
     padding: 10px;
 }}
 
+/* Tabs. Beat Thief has none, so this is the one piece of the vocabulary being
+   invented rather than borrowed: keep it to the tokens above. */
+QTabWidget::pane {{
+    border: none;
+    border-top: 1px solid {EDGE};
+}}
+QTabBar {{
+    background: {PANEL};
+    qproperty-drawBase: 0;
+}}
+QTabBar::tab {{
+    background: {PANEL};
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: {DIM};
+    font-size: 11.5px;
+    font-weight: 600;
+    margin-right: 2px;
+    padding: 10px 16px 8px;
+}}
+QTabBar::tab:hover {{
+    color: {INK};
+}}
+QTabBar::tab:selected {{
+    background: {RAISED};
+    border-bottom: 2px solid {VIOLET};
+    color: {INK};
+}}
+QTabBar::close-button {{
+    subcontrol-position: right;
+    margin-left: 4px;
+}}
+
+/* The per-project status line, at the foot of each pane. */
+QLabel#statusLine {{
+    background: {PANEL};
+    border-top: 1px solid {EDGE};
+    color: {DIM};
+    font-size: 11px;
+    padding: 7px 24px;
+}}
+
+/* The start screen. */
+QLabel#wordmark {{
+    font-size: 34px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+}}
+QLabel#tagline {{
+    color: {DIM};
+    font-size: 13px;
+}}
+QListWidget#recentList {{
+    background: {SUNKEN};
+    border: 1px solid {EDGE};
+    border-radius: {RADIUS}px;
+    outline: none;
+    padding: 5px;
+}}
+QListWidget#recentList::item {{
+    border-radius: 4px;
+    color: {INK};
+    padding: 9px 12px;
+}}
+QListWidget#recentList::item:hover {{
+    background: {RAISED};
+}}
+QListWidget#recentList::item:selected {{
+    background: {VIOLET_DIM};
+    color: {INK};
+}}
+QLabel#recentName {{
+    color: {INK};
+    font-size: 13.5px;
+    font-weight: 600;
+}}
+QLabel#recentPath {{
+    color: {FAINT};
+    font-size: 11px;
+}}
+
+/* Qt's stock tab close button ignores stylesheets, so the tab bar builds its
+   own; this styles it back down to something that belongs here. */
+QPushButton#tabClose {{
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    color: {FAINT};
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 0;
+    padding: 0;
+}}
+QPushButton#tabClose:hover {{
+    background: {EDGE};
+    color: {INK};
+}}
+
+QScrollBar:vertical {{
+    background: transparent;
+    width: 9px;
+    margin: 0;
+}}
+QScrollBar::handle:vertical {{
+    background: {EDGE_LIT};
+    border-radius: 4px;
+    min-height: 24px;
+}}
+QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
+QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
+
 QStatusBar {{
     background: {PANEL};
     border-top: 1px solid {EDGE};

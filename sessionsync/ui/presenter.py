@@ -180,6 +180,30 @@ def _last_push(last_push: dict | None) -> str:
     return f"Last push: v{last_push.get('version')} — {when} — {note} ({counts})"
 
 
+# --- closing a project ---------------------------------------------------
+
+
+def close_warning(status: Status) -> str | None:
+    """Why closing this project deserves a word first, or None.
+
+    Closing never destroys anything — the files stay in the project folder —
+    so this is a nudge that the work is not backed up and nobody else can see
+    it, not a data-loss guard. Saying that plainly is the difference between a
+    useful warning and a frightening one.
+    """
+    diff = status.diff
+    if not diff.has_changes:
+        return None
+
+    count = len(diff.added) + len(diff.modified) + len(diff.deleted)
+    files = "file has" if count == 1 else "files have"
+    return (
+        f"{count} {files} changed since your last push. Closing this does not "
+        "delete them — they stay in the project folder — but they are not backed "
+        "up, and nobody else can see them."
+    )
+
+
 # --- notifications -------------------------------------------------------
 
 

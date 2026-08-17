@@ -69,6 +69,24 @@ class Engine(QObject):
         self._run("end_session", "Ending…", lambda: self._repository().end_session())
 
     @Slot()
+    def close_session(self) -> None:
+        """Give up the heartbeat on the way out.
+
+        Deliberately not `end_session`: no scan, no snapshot, no dialogs — this
+        runs while a tab is closing. It also asks the repository whether a
+        session is open rather than trusting the window, whose snapshot may be
+        minutes old; guessing wrong leaves exactly the ghost session this is
+        here to prevent.
+        """
+        repo = self._repo
+        if repo is None or not repo.state.session:
+            return
+        try:
+            repo.end_session()
+        except Exception:  # noqa: BLE001 - nothing useful to do while closing
+            pass
+
+    @Slot()
     def heartbeat(self) -> None:
         repo = self._repo
         if repo is None or not repo.state.session:

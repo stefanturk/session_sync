@@ -3,10 +3,28 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QWidget
 
 from sessionsync.ui import theme
+
+
+def dot_icon(colour: str, size: int = 10) -> QIcon:
+    """A filled circle for a tab.
+
+    A background tab turning amber is how you find out someone pushed to a
+    project you are not looking at, which is the whole reason for having more
+    than one open.
+    """
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor(colour))
+    painter.drawEllipse(QRectF(1, 1, size - 2, size - 2))
+    painter.end()
+    return QIcon(pixmap)
 
 
 class Led(QWidget):

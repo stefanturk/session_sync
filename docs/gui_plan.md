@@ -23,14 +23,16 @@ create them yet.
 
 | File | Responsibility |
 |---|---|
-| `presenter.py` | **What the window says** — banner, header status, button states, notification-worthy news. No Qt, fully unit tested. |
+| `presenter.py` | **What the window says** — banner, header status, button states, close warnings, notification-worthy news. No Qt, fully unit tested. |
 | `theme.py` | The palette and the whole stylesheet, in one place. |
-| `widgets.py` | The indicator light — the one thing a stylesheet cannot express. |
+| `widgets.py` | The indicator light and the tab dots — what a stylesheet cannot express. |
 | `engine.py` | The `Repository`, on its own thread. Everything is serialised through it. |
-| `window.py` | Layout and wiring only. |
+| `pane.py` | **One project.** Owns its engine, thread, timers and widgets. |
+| `window.py` | The shell: tabs, menus, and the question asked before closing. |
+| `start.py` | The screen you land on — recent projects, one click each. |
 | `settings.py` | Recent projects, in `~/.sessionsync/ui.json`. |
 | `notify.py` | macOS notifications via `osascript`. |
-| `app.py` | Identity on first launch, then which project to open. |
+| `app.py` | Identity on first launch, then the shell. |
 
 Two reasons the engine has its own thread: scanning a large project takes real
 time, and `Repository` owns SQLite connections, which belong to the thread that
@@ -139,10 +141,49 @@ use for — WebEngine, Quick/QML, 3D, Multimedia, Charts.
 Not signed with a Developer ID and not notarised, so another Mac will warn on
 first launch. That needs a paid Apple developer account.
 
+## Several projects at once
+
+The app opens on the start screen, not a project. Each project is a tab with its
+own engine on its own thread; the shell owns only the tab bar and the menus.
+
+- **Each tab carries a coloured dot** in the same four levels as the banner. A
+  background tab turning amber is how you find out someone pushed to a project
+  you are not looking at — the whole reason for having more than one open.
+- **The same folder never gets two tabs.** Two `Repository` instances on one
+  `state.db` from two threads could interleave their `base_version` writes, so
+  opening an already-open project focuses its tab instead.
+- The visible tab refreshes every 60 s, **background tabs every 180 s** — five
+  large projects rescanning every minute is real disk churn for information
+  nobody is reading. Switching to a tab refreshes it at once, so you never land
+  on stale news. **Heartbeats stay at 60 s regardless**: a late heartbeat makes
+  other people think you stopped working, which is worse than a late status.
+- `⌘O` open, `⌘W` close the tab (not the app), `⌘1`–`⌘9` jump.
+
+## Closing a project
+
+**Closing never destroys work** — the files stay in the project folder. The
+warning is a nudge that the work is not backed up and nobody else can see it,
+not a data-loss guard. That is why a snapshot up to three minutes old is good
+enough, and why the app never blocks on a fresh scan to be sure.
+
+With unpushed work, closing a tab offers **Cancel / Close Anyway / Push First…**.
+`Push First…` cancels the close and starts the push, leaving the tab open —
+deliberately not "push then close", which would need a close-after-async state
+machine and would have to unwind a close already in flight when a push fails.
+
+Quitting asks **once** for everything, listing the projects, rather than one
+dialog per tab. With exactly one, it reuses the single-tab dialog so
+`Push First…` is still on offer.
+
+**Closing a tab ends its session.** A lingering heartbeat has collaborators
+believing you are still recording for up to fifteen minutes. The engine is asked
+rather than the window's snapshot — that can be minutes old, and guessing wrong
+leaves exactly the ghost this prevents. It goes through a
+`BlockingQueuedConnection`, because emitting a signal and immediately quitting
+the thread would race.
+
 ## Still to do
 
 - Setting up a *new* project from the window (currently CLI only).
-- A project list instead of one window per project — the single-project window
-  is the whole workflow, so this is comfort, not capability.
 - Progress inside a long push/pull (currently a status message, no percentage) —
   wants byte-level callbacks from `Repository.push`.

@@ -6,7 +6,7 @@ import pytest
 
 from sessionsync.core.manifest import FileEntry, diff_file_maps
 from sessionsync.core.repository import Status
-from sessionsync.ui.presenter import notifications, screen
+from sessionsync.ui.presenter import close_warning, notifications, screen
 
 
 def entry(path: str, sha: str, size: int = 100) -> FileEntry:
@@ -261,6 +261,45 @@ def test_last_push_is_remembered_between_launches():
 
 def test_no_last_push_line_before_the_first_push():
     assert screen(make_status("up_to_date"), project_name="X").last_push == ""
+
+
+# --- closing a project ----------------------------------------------------
+
+
+def test_closing_a_project_with_nothing_outstanding_needs_no_warning():
+    assert close_warning(make_status("up_to_date")) is None
+
+
+def test_closing_a_project_with_unpushed_work_is_worth_a_word():
+    status = make_status("local_changes", added={"Sax.aif": "a", "Bass.aif": "b"})
+    assert "2 files have changed" in close_warning(status)
+
+
+def test_a_single_changed_file_is_not_pluralised():
+    status = make_status("local_changes", added={"Sax.aif": "a"})
+    assert "1 file has changed" in close_warning(status)
+
+
+def test_the_warning_says_the_recordings_are_not_being_deleted():
+    """Closing never destroys work — the files stay in the project folder.
+    Saying so is the difference between a useful nudge and a scare."""
+    warning = close_warning(make_status("local_changes", added={"Sax.aif": "a"}))
+    assert "does not delete" in warning
+    assert "not backed up" in warning
+
+
+def test_deletions_count_as_unpushed_work_too():
+    before = {"Old.aif": entry("Old.aif", "a")}
+    status = Status(
+        state="local_changes",
+        local_version=3,
+        remote_version=3,
+        diff=diff_file_maps(before, {}),
+        project_bytes=0,
+        upload_bytes=0,
+        already_stored_bytes=0,
+    )
+    assert "1 file has changed" in close_warning(status)
 
 
 # --- notifications -------------------------------------------------------

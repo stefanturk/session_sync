@@ -1,7 +1,7 @@
-"""The window itself: does it build, and does it draw a real repository?
+"""The tab shell: several projects at once, and what closing one asks.
 
-Runs headless (offscreen). These are wiring tests — the wording and the button
-rules are covered in `test_ui_presenter.py`.
+Dialogs are never run — `_confirm_close` is substituted, so these tests say what
+the shell *does* with each answer rather than driving a modal.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from sessionsync.ui.engine import Engine  # noqa: E402
+from sessionsync.ui.settings import Settings  # noqa: E402
 from sessionsync.ui.window import MainWindow  # noqa: E402
 
 
@@ -33,14 +33,217 @@ def identity(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def window(qt_app, identity, alice):
-    window = MainWindow(alice.project_root)
+def window(qt_app, identity):
+    window = MainWindow(Settings())
     yield window
+    window.close_everything()
+
+
+# --- opening -------------------------------------------------------------
+
+
+def test_it_opens_on_the_start_screen_not_a_project(window):
+    assert window.tabs.count() == 0
+    assert window.stack.currentWidget() is window.start
+
+
+def test_opening_a_project_gives_it_a_tab(window, alice):
+    window.open_project(alice.project_root)
+
+    assert window.tabs.count() == 1
+    assert window.tabs.tabText(0) == "My Song"
+    assert window.stack.currentWidget() is window.tabs
+
+
+def test_two_projects_are_two_tabs(window, alice, bob):
+    window.open_project(alice.project_root)
+    window.open_project(bob.project_root)
+
+    assert window.tabs.count() == 2
+
+
+def test_opening_the_same_project_twice_focuses_the_tab_it_is_already_in(window, alice, bob):
+    """Two Repositories on one state.db from two threads could interleave
+    their writes, so the same folder must never get a second engine."""
+    first = window.open_project(alice.project_root)
+    window.open_project(bob.project_root)
+
+    again = window.open_project(alice.project_root)
+
+    assert window.tabs.count() == 2
+    assert again is first
+    assert window.tabs.currentWidget() is first
+
+
+def test_a_project_opened_by_a_different_route_to_the_same_folder_is_not_reopened(
+    window, alice
+):
+    window.open_project(alice.project_root)
+
+    window.open_project(alice.project_root / "Samples" / ".." )
+
+    assert window.tabs.count() == 1
+
+
+def test_opening_a_project_remembers_it_for_next_time(window, alice):
+    window.open_project(alice.project_root)
+
+    assert alice.project_root in Settings().recent_projects()
+
+
+def test_a_folder_that_is_not_a_project_is_refused_and_explained(window, tmp_path):
+    refused = []
+    window._not_a_project = refused.append
+
+    window.open_project(tmp_path / "just some folder")
+
+    assert window.tabs.count() == 0
+    assert refused, "silently doing nothing would look like the app is broken"
+
+
+# --- the tab itself ------------------------------------------------------
+
+
+def test_the_tab_carries_a_light_showing_how_that_project_stands(window, alice):
+    pane = window.open_project(alice.project_root)
+    pane._show(_snapshot_of(alice.project_root))
+
+    assert not window.tabs.tabIcon(0).isNull()
+    assert "UP TO DATE" in window.tabs.tabToolTip(0)
+
+
+def test_the_window_title_follows_the_open_project(window, alice):
+    window.open_project(alice.project_root)
+
+    assert "My Song" in window.windowTitle()
+
+
+def test_the_title_goes_back_to_the_app_name_with_nothing_open(window, alice):
+    window.open_project(alice.project_root)
+    window.close_tab(0)
+
+    assert window.windowTitle() == "SessionSync"
+
+
+def test_only_the_visible_tab_checks_often(window, alice, bob):
+    from sessionsync.ui.pane import ACTIVE_REFRESH_MS, BACKGROUND_REFRESH_MS
+
+    first = window.open_project(alice.project_root)
+    second = window.open_project(bob.project_root)
+
+    assert second.timer.interval() == ACTIVE_REFRESH_MS
+    assert first.timer.interval() == BACKGROUND_REFRESH_MS
+
+
+def test_a_background_tab_still_beats_at_the_normal_rate(window, alice, bob):
+    """A late heartbeat makes other people think you stopped working."""
+    from sessionsync.core.session import HEARTBEAT_SECONDS
+
+    first = window.open_project(alice.project_root)
+    window.open_project(bob.project_root)
+
+    assert first.heartbeat_timer.interval() == HEARTBEAT_SECONDS * 1000
+
+
+# --- closing -------------------------------------------------------------
+
+
+def test_closing_a_project_with_nothing_outstanding_does_not_ask(window, alice):
+    pane = window.open_project(alice.project_root)
+    pane._show(_snapshot_of(alice.project_root))
+    asked = _never_ask(window)
+
+    window.close_tab(0)
+
+    assert asked == []
+    assert window.tabs.count() == 0
+
+
+def test_closing_a_project_with_unpushed_work_asks_first(window, alice):
+    (alice.project_root / "Samples" / "Recorded" / "Sax.aif").write_bytes(b"sax")
+    pane = window.open_project(alice.project_root)
+    pane._show(_snapshot_of(alice.project_root))
+    asked = _answer(window, "cancel")
+
+    window.close_tab(0)
+
+    assert asked == [pane]
+    assert window.tabs.count() == 1, "cancelling must leave the project open"
+
+
+def test_closing_anyway_closes_it(window, alice):
+    (alice.project_root / "Samples" / "Recorded" / "Sax.aif").write_bytes(b"sax")
+    pane = window.open_project(alice.project_root)
+    pane._show(_snapshot_of(alice.project_root))
+    _answer(window, "close")
+
+    window.close_tab(0)
+
+    assert window.tabs.count() == 0
+    assert (alice.project_root / "Samples" / "Recorded" / "Sax.aif").exists(), (
+        "closing must never remove the recording"
+    )
+
+
+def test_choosing_to_push_first_keeps_the_project_open(window, alice, monkeypatch):
+    (alice.project_root / "Samples" / "Recorded" / "Sax.aif").write_bytes(b"sax")
+    pane = window.open_project(alice.project_root)
+    pane._show(_snapshot_of(alice.project_root))
+    _answer(window, "push")
+    pushed = []
+    monkeypatch.setattr(pane, "push", lambda: pushed.append(True))
+
+    window.close_tab(0)
+
+    assert window.tabs.count() == 1
+    assert pushed == [True]
+
+
+def test_closing_a_tab_ends_the_session_rather_than_leaving_a_ghost(window, alice, bob):
+    """A lingering heartbeat has collaborators believing you are still
+    recording for up to fifteen minutes."""
+    pane = window.open_project(alice.project_root)
+    pane.request_start_session.emit()
+    assert _spin_until(lambda: bob.other_sessions()), "the session never started"
+    _never_ask(window)
+
+    window.close_tab(0)
+
+    assert bob.other_sessions() == []
+
+
+def test_quitting_with_unpushed_work_asks_once_for_everything(window, alice, bob):
+    for repo in (alice, bob):
+        (repo.project_root / "Samples" / "Recorded" / "Sax.aif").write_bytes(b"sax")
+    for repo in (alice, bob):
+        pane = window.open_project(repo.project_root)
+        pane._show(_snapshot_of(repo.project_root))
+    asked = _answer_quit(window, False)
+
     window.close()
 
+    assert len(asked) == 1, "one dialog for the app, not one per tab"
+    assert window.tabs.count() == 2, "declining must leave everything open"
 
-def snapshot_of(project_root):
-    """What the engine would hand the window, without a thread in the way."""
+
+# --- helpers -------------------------------------------------------------
+
+
+def _spin_until(predicate, timeout_ms: int = 3000) -> bool:
+    """Let the engine thread get on with it, without an event loop to run in."""
+    from PySide6.QtCore import QThread
+
+    for _ in range(timeout_ms // 20):
+        QApplication.processEvents()
+        if predicate():
+            return True
+        QThread.msleep(20)
+    return False
+
+
+def _snapshot_of(project_root):
+    from sessionsync.ui.engine import Engine
+
     engine = Engine(project_root)
     captured = []
     engine.snapshot_ready.connect(captured.append)
@@ -48,97 +251,34 @@ def snapshot_of(project_root):
     return captured[-1]
 
 
-def test_the_window_opens_on_a_real_project(window, alice):
-    assert window.windowTitle() == "SessionSync — My Song"
+def _answer(window, answer):
+    asked = []
+
+    def fake(pane):
+        asked.append(pane)
+        return answer
+
+    window._confirm_close = fake
+    return asked
 
 
-def test_a_freshly_pushed_project_reads_as_up_to_date(window, alice, identity):
-    window._show(snapshot_of(alice.project_root))
+def _never_ask(window):
+    asked = []
 
-    assert window.title_label.text() == "My Song"
-    assert "Up to date" in window.banner.text()
-    assert window.session_button.text() == "START SESSION"
-    assert not window.push_button.isEnabled()
+    def fake(pane):
+        asked.append(pane)
+        return "close"
 
-
-def test_a_new_recording_appears_in_the_change_list(window, alice, identity):
-    (alice.project_root / "Samples" / "Recorded" / "Sax.aif").write_bytes(b"sax take")
-
-    window._show(snapshot_of(alice.project_root))
-
-    rows = [
-        window.changes.topLevelItem(i).text(1) for i in range(window.changes.topLevelItemCount())
-    ]
-    assert "Samples/Recorded/Sax.aif" in rows
-    assert window.push_button.isEnabled()
+    window._confirm_close = fake
+    return asked
 
 
-def test_being_behind_disables_starting_a_session(window, alice, bob, identity):
-    (bob.project_root / "Samples" / "Recorded" / "Bass.aif").write_bytes(b"bass")
-    bob.push(note="Bass")
+def _answer_quit(window, allow):
+    asked = []
 
-    window._show(snapshot_of(alice.project_root))
+    def fake(panes):
+        asked.append(panes)
+        return allow
 
-    assert "behind" in window.banner.text()
-    assert not window.session_button.isEnabled()
-    assert window.pull_button.isEnabled()
-    assert "Pull latest" in window.session_button.toolTip()
-
-
-def test_someone_else_working_is_shown_on_the_presence_line(window, alice, bob, identity):
-    bob.start_session()
-
-    window._show(snapshot_of(alice.project_root))
-
-    assert "Bob" in window.presence_label.text()
-    assert window.presence_label.isVisible() or window.presence_label.text()
-
-
-def test_a_background_check_does_not_take_the_buttons_away(window, alice, identity):
-    """A 6 GB project takes seconds to scan. Greying the app out every minute
-    while it happens would make it feel broken."""
-    (alice.project_root / "Samples" / "Recorded" / "Sax.aif").write_bytes(b"sax take")
-    window._show(snapshot_of(alice.project_root))
-
-    window._checking(True)
-
-    assert window.push_button.isEnabled()
-    assert window.statusBar().currentMessage()
-
-
-def test_a_real_operation_does_take_the_buttons_away(window, alice, identity):
-    (alice.project_root / "Samples" / "Recorded" / "Sax.aif").write_bytes(b"sax take")
-    window._show(snapshot_of(alice.project_root))
-
-    window._busy_changed("Pushing…")
-
-    assert not window.push_button.isEnabled()
-
-
-def test_the_recommended_action_stands_out(window, alice, identity):
-    (alice.project_root / "Samples" / "Recorded" / "Sax.aif").write_bytes(b"sax take")
-
-    window._show(snapshot_of(alice.project_root))
-
-    assert window.push_button.property("primary") is True
-    assert window.pull_button.property("primary") is False
-
-
-def test_the_engine_reports_failures_rather_than_raising(qt_app, identity, tmp_path):
-    engine = Engine(tmp_path / "not a project")
-    failures = []
-    engine.operation_failed.connect(lambda name, exc: failures.append((name, exc)))
-
-    engine.refresh()
-
-    assert failures and failures[0][0] == "refresh"
-
-
-def test_a_push_with_nothing_to_push_is_a_reported_failure_not_a_crash(qt_app, identity, alice):
-    engine = Engine(alice.project_root)
-    failures = []
-    engine.operation_failed.connect(lambda name, exc: failures.append((name, exc)))
-
-    engine.push("")
-
-    assert failures[0][0] == "push"
+    window._confirm_quit = fake
+    return asked
