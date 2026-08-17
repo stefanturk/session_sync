@@ -27,11 +27,20 @@ set down to 95 KB actually uploaded.
 Build a double-clickable Mac app that needs no Python installed:
 
 ```bash
-scripts/build_app.sh          # → dist/SessionSync.app  (about 100 MB)
+scripts/build_app.sh          # → ~/Applications/SessionSync.app  (about 100 MB)
+open ~/Applications/SessionSync.app
 ```
 
-Drag it to `/Applications`. It opens the last project you worked on, or asks
-for a folder. It is unsigned, so the first launch may need right-click → Open.
+To keep it in the Dock: launch it, then right-click its Dock icon →
+Options → Keep in Dock.
+
+It opens the last project you worked on, or asks for a folder. On first launch
+macOS asks for permission to read the folder your projects are in.
+
+It installs into `~/Applications` rather than leaving the bundle in `dist/`,
+because the Dock pins whichever bundle you dragged from — and `dist/` is deleted
+on every rebuild. Anything that fails to start is logged to
+`~/Library/Logs/SessionSync.log` and reported in a dialog.
 
 For the `sessionsync` command without managing a virtualenv yourself:
 

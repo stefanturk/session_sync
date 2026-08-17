@@ -6,7 +6,15 @@
 # (WebEngine alone is hundreds of megabytes), so the unused modules are excluded
 # rather than shipped.
 
+import os
+
 block_cipher = None
+
+# Rendered by scripts/render_icon.py during the build; absent if that failed,
+# in which case the app gets the generic bundle icon rather than no app.
+ICON = os.environ.get("SESSIONSYNC_ICNS") or None
+if ICON and not os.path.exists(ICON):
+    ICON = None
 
 UNUSED_QT = [
     "PySide6.QtWebEngineCore",
@@ -80,17 +88,29 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="SessionSync.app",
-    icon=None,
-    bundle_identifier="com.sessionsync.app",
+    icon=ICON,
+    bundle_identifier="com.stefan.sessionsync",
     info_plist={
         "CFBundleName": "SessionSync",
         "CFBundleDisplayName": "SessionSync",
         "CFBundleShortVersionString": "0.1.0",
         "CFBundleVersion": "0.1.0",
         "NSHighResolutionCapable": True,
-        # Nothing here is a document-based app, and a background agent would
-        # hide the window — this is an ordinary foreground app.
+        # A real app with a Dock icon and a menu bar, not a background agent.
         "LSUIElement": False,
         "LSMinimumSystemVersion": "12.0",
+        # Ableton projects live in exactly the folders macOS gates behind a
+        # permission prompt. Without these keys the prompt appears with no
+        # explanation, which reads like something is wrong with the app.
+        "NSDesktopFolderUsageDescription":
+            "SessionSync needs access to open Ableton projects kept on your Desktop.",
+        "NSDocumentsFolderUsageDescription":
+            "SessionSync needs access to open Ableton projects kept in Documents.",
+        "NSDownloadsFolderUsageDescription":
+            "SessionSync needs access to open Ableton projects kept in Downloads.",
+        "NSRemovableVolumesUsageDescription":
+            "SessionSync needs access to sync projects to an external drive.",
+        "NSNetworkVolumesUsageDescription":
+            "SessionSync needs access to sync projects to a NAS or shared folder.",
     },
 )

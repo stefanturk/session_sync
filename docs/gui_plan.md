@@ -85,15 +85,27 @@ Rules the tests hold to:
 ## Packaging
 
 `packaging/SessionSync.spec` + `scripts/build_app.sh` produce a ~100 MB
-`dist/SessionSync.app`, ad-hoc signed so the Mac that built it will open it
-without the "damaged" dialog.
+`~/Applications/SessionSync.app`, ad-hoc signed so the Mac that built it will
+open it without the "damaged" dialog.
 
-Two things a bundled app does differently from a shell, both handled:
+Things a bundled app does differently from a shell, all handled:
 
 - It inherits a minimal `PATH`, so `osascript` is called by full path and
   "reveal in Finder" goes through `QDesktopServices` rather than `open`.
 - Finder passes a `-psn_0_12345` process serial number as an argument, which
   must not be taken for a project folder.
+- There is no terminal, so a failure to start would be silent. `packaging/
+  entry.py` logs to `~/Library/Logs/SessionSync.log` and raises a dialog.
+- Ableton projects live in Desktop/Documents/Downloads, which macOS gates.
+  The `NS*FolderUsageDescription` keys give that prompt a reason.
+
+**It installs to `~/Applications`, not `dist/`.** The Dock pins the bundle it
+was dragged from, and `dist/` is deleted on every rebuild — a Dock icon pointing
+there breaks silently, because the Dock keeps showing the icon either way. The
+build also sweeps away stray copies for the same reason.
+
+The icon is drawn by `scripts/render_icon.py` with QPainter — Qt is already a
+dependency, so no image library and no binary checked into the repository.
 
 Most of the 100 MB is Qt. The spec excludes what a four-button window has no
 use for — WebEngine, Quick/QML, 3D, Multimedia, Charts.
