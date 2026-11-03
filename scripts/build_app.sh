@@ -17,6 +17,14 @@ dest="${1:-$HOME/Applications}"
 app="$dest/SessionSync.app"
 
 python="${PYTHON:-$root/.venv/bin/python}"
+# No venv here? Use the Steezy Studio engine's Python (3.12) if it is installed
+# and this app's packages install into it. An existing venv is always preferred.
+engine_py="${STEEZY_ENGINE_DIR:-$HOME/Library/Application Support/Steezy Studio/engine}/python/bin/python3"
+if [ ! -x "$python" ] && [ -x "$engine_py" ] \
+    && "$engine_py" -c 'import sys; assert sys.version_info >= (3, 12)' >/dev/null 2>&1 \
+    && "$engine_py" -m pip install --quiet --prefer-binary -e ".[package]" >/dev/null 2>&1; then
+    python="$engine_py"
+fi
 if [ ! -x "$python" ]; then
     echo "No interpreter at $python — create the venv first:" >&2
     echo "    python3.12 -m venv .venv && .venv/bin/pip install -e '.[package]'" >&2
