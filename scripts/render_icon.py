@@ -5,8 +5,8 @@ library or checking a binary into the repository.
 
     python scripts/render_icon.py out.png [size]
 
-The mark: a waveform inside a rounded square, with a sync arrow curling around
-it. It has to stay legible at 16 px in the menu bar, so there are five bars, no
+The mark: a white waveform inside a black, white-outlined rounded square, with a
+small purple sync arrow curling around it. It has to stay legible at 16 px in the menu bar, so there are five bars, no
 thin strokes, and no text.
 """
 
@@ -24,16 +24,17 @@ from PySide6.QtGui import (  # noqa: E402
     QColor,
     QGuiApplication,
     QImage,
-    QLinearGradient,
     QPainter,
     QPainterPath,
     QPen,
 )
 
-BACKGROUND_TOP = "#4a8ef0"
-BACKGROUND_BOTTOM = "#1d4a92"
+# Ableton Live's palette: a black tile with a white keyline, a white mark and a
+# purple accent.
+BACKGROUND = "#0b0b0d"
+OUTLINE = "#ffffff"
 WAVE = "#ffffff"
-ARROW = "#8fd6a0"
+ARROW = "#9b6bff"
 
 # Bar heights as a fraction of the icon, middle-out. Deliberately asymmetric so
 # it reads as audio rather than as a chart.
@@ -54,17 +55,20 @@ def render(size: int) -> QImage:
 
 
 def _background(painter: QPainter, size: int) -> None:
-    gradient = QLinearGradient(0, 0, 0, size)
-    gradient.setColorAt(0.0, QColor(BACKGROUND_TOP))
-    gradient.setColorAt(1.0, QColor(BACKGROUND_BOTTOM))
-
     # macOS icons sit inside a rounded square with a little breathing room.
     inset = size * 0.06
     radius = size * 0.225
+    # A white tile with a slightly smaller black one on top: the white is the
+    # outline, wholly outside the black.
+    outer = QRectF(inset, inset, size - inset * 2, size - inset * 2)
     painter.setPen(Qt.NoPen)
-    painter.setBrush(QBrush(gradient))
+    painter.setBrush(QBrush(QColor(OUTLINE)))
+    painter.drawRoundedRect(outer, radius, radius)
+
+    edge = size * 0.03
+    painter.setBrush(QBrush(QColor(BACKGROUND)))
     painter.drawRoundedRect(
-        QRectF(inset, inset, size - inset * 2, size - inset * 2), radius, radius
+        outer.adjusted(edge, edge, -edge, -edge), radius - edge, radius - edge
     )
 
 
@@ -95,11 +99,11 @@ ARC_SPAN_DEG = 284.0
 
 
 def _sync_arrow(painter: QPainter, size: int) -> None:
-    margin = size * 0.155
+    margin = size * 0.195
     box = QRectF(margin, margin, size - margin * 2, size - margin * 2)
 
     pen = QPen(QColor(ARROW))
-    pen.setWidthF(size * 0.062)
+    pen.setWidthF(size * 0.048)
     pen.setCapStyle(Qt.RoundCap)
     painter.setPen(pen)
     painter.setBrush(Qt.NoBrush)
@@ -113,7 +117,7 @@ def _sync_arrow(painter: QPainter, size: int) -> None:
     # Qt sweeps counter-clockwise, so the tangent at the end points this way.
     tangent = math.atan2(-math.cos(end), -math.sin(end))
 
-    head = size * 0.105
+    head = size * 0.08
     painter.setPen(Qt.NoPen)
     painter.setBrush(QColor(ARROW))
     painter.save()
