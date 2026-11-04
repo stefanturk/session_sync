@@ -15,7 +15,7 @@ before you start playing — not after two hours of takes.
 | Folder-backed storage (a folder, external drive, NAS) | done |
 | CLI (`sessionsync`) | done |
 | PySide6 Mac app, packaged as a `.app` | done |
-| Test suite, incl. crash and stale-push tests | 225 passing |
+| Test suite, incl. crash and stale-push tests | 260 passing |
 | Google Drive backend | next |
 
 Proven on a real 415 MB Live 11 project: byte-for-byte reconstruction of 103
