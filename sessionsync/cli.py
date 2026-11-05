@@ -298,6 +298,38 @@ def who(project: Path = PROJECT_OPTION) -> None:
     typer.echo(text or "Nobody else is working on this project right now.")
 
 
+@app.command()
+def catchup(project: Path = PROJECT_OPTION) -> None:
+    """Someone put back first: save your version aside, bring theirs, say who did what."""
+    from sessionsync.core.summary import describe_catch_up
+
+    repo = _open(project)
+    try:
+        result = repo.catch_up()
+    except (SessionSyncError, ValueError) as exc:
+        _fail(exc)
+    typer.echo(f"Caught up to v{result.pulled.to_version}.\n")
+    typer.echo(describe_catch_up(result))
+
+
+@app.command()
+def pin(
+    version: int = typer.Argument(..., help="The version to keep for good."),
+    project: Path = PROJECT_OPTION,
+    unpin: bool = typer.Option(False, "--unpin", help="Stop keeping it."),
+) -> None:
+    """Keep a version even after it is older than the last five."""
+    repo = _open(project)
+    pin_version = getattr(repo.storage, "pin_version", None)
+    if pin_version is None:
+        _fail("Only shared-folder projects keep a limited history.")
+    try:
+        pin_version(version, not unpin)
+    except ValueError as exc:
+        _fail(exc)
+    typer.echo(f"v{version} will {'no longer ' if unpin else ''}be kept for good.")
+
+
 # --- sessions ------------------------------------------------------------
 
 
@@ -402,6 +434,33 @@ def song_new(
     except (SessionSyncError, FileExistsError) as exc:
         _fail(exc)
     typer.echo(f"'{repo.project_root.name}' is now shared in {hub.name} (v{repo.base_version}).")
+
+
+@song_app.command("add")
+def song_add(
+    hub_name: str = typer.Argument(..., help="Which shared folder."),
+    project: Path = typer.Argument(..., help="Your Ableton project folder."),
+    name: str = typer.Option(None, "--name", help="Song name (default: the project folder name)."),
+) -> None:
+    """Add a project from this Mac to a shared folder (your folder becomes your working copy)."""
+    song_new(hub_name, project, name)
+
+
+@song_app.command("get")
+def song_get(
+    hub_name: str = typer.Argument(..., help="Which shared folder."),
+    song: str = typer.Argument(..., help="The song to get."),
+    to: Path = typer.Option(None, "--to", help="Where to put your copy (anywhere)."),
+) -> None:
+    """Make your own working copy of a shared song, anywhere on this Mac."""
+    hub = _find_hub(hub_name)
+    settings = _settings()
+    try:
+        repo = hub.join_song(song, settings.local_root(), load_identity(), to)
+    except (SessionSyncError, FileExistsError) as exc:
+        _fail(exc)
+    settings.set_song_path(hub, song, repo.project_root)
+    typer.echo(f"Your copy of '{song}' is at {repo.project_root}.")
 
 
 @song_app.command("join")

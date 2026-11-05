@@ -27,7 +27,7 @@ def test_rows_show_new_behind_and_current(tmp_path, monkeypatch):
     (bob_song.project_root / "Samples" / "Recorded" / "x.wav").write_bytes(b"x")
     bob_song.push(note="more")
     rows = {r.song.name: r for r in hubsync.song_rows(hub, settings)}
-    assert rows["Song B"].state == "behind" and rows["Song B"].label == "1 new version to pull"
+    assert rows["Song B"].state == "behind" and rows["Song B"].label == "1 newer version to get"
     assert rows["Song B"].detail.startswith("Bob")
 
 
@@ -75,3 +75,38 @@ def test_my_own_pushes_are_not_news(tmp_path, monkeypatch):
     (path / "Samples" / "Recorded" / "mine.wav").write_bytes(b"m")
     repo.push()
     assert hubsync.check_hubs(settings, ALICE) == []
+
+
+def test_rows_say_who_is_working_and_who_has_unpushed_changes(tmp_path, monkeypatch):
+    settings, hub = setup_world(tmp_path, monkeypatch)
+    sam = hub.add_song("Song B", write_project(tmp_path / "bob" / "Song B", "Song B"), BOB)
+    assert sam.refresh_presence(live_here=True) == "working"
+
+    row = hubsync.song_rows(hub, settings, ALICE)[0]
+    assert row.working == ["Bob"] and "working on it now" in row.label
+    assert hubsync.song_rows(hub, settings, BOB)[0].working == []  # not about yourself
+
+    (sam.project_root / "Samples" / "Recorded" / "x.wav").write_bytes(b"x")
+    sam.refresh_presence(live_here=False)
+    row = hubsync.song_rows(hub, settings, ALICE)[0]
+    assert row.working == [] and row.unpushed == ["Bob"]
+    assert "not put back" in row.label
+
+
+def test_live_warning_when_opening_a_set_someone_is_on(tmp_path, monkeypatch):
+    settings, hub = setup_world(tmp_path, monkeypatch)
+    sam = hub.add_song("Song B", write_project(tmp_path / "bob" / "Song B", "Song B"), BOB)
+    sam.refresh_presence(live_here=True)
+    mine = hubsync.join(hub, "Song B", settings, ALICE)
+
+    warning = hubsync.live_warning(settings, ALICE, mine / "Song B.als")
+    assert warning is not None and "Bob is working on Song B" in warning.text
+    assert hubsync.live_warning(settings, ALICE, tmp_path / "elsewhere" / "x.als") is None
+    assert hubsync.live_warning(settings, ALICE, None) is None
+
+
+def test_live_warning_when_opening_the_shared_copy_directly(tmp_path, monkeypatch):
+    settings, hub = setup_world(tmp_path, monkeypatch)
+    hub.add_song("Song B", write_project(tmp_path / "bob" / "Song B", "Song B"), BOB)
+    warning = hubsync.live_warning(settings, ALICE, hub.path / "Song B" / "Song B.als")
+    assert warning is not None and "shared copy" in warning.text

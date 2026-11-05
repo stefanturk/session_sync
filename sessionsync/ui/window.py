@@ -66,9 +66,17 @@ class MainWindow(QMainWindow):
         self.notifier = Notifier(on_click=self.show_news_target)
         self._hub_check: _HubCheck | None = None
         self._hub_timer: QTimer | None = None
+        self._last_live_warning = None
         self._build()
 
     # --- construction ----------------------------------------------------
+
+    @staticmethod
+    def _me() -> dict | None:
+        try:
+            return load_identity()
+        except Exception:  # noqa: BLE001 - the list still works without knowing who you are
+            return None
 
     def _build(self) -> None:
         self.tabs = QTabWidget()
@@ -78,12 +86,12 @@ class MainWindow(QMainWindow):
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.tabs.currentChanged.connect(self._tab_changed)
 
-        self.start = StartScreen(self.settings)
+        self.start = StartScreen(self.settings, me=self._me())
         self.start.open_requested.connect(self.choose_project)
         self.start.project_chosen.connect(self.open_project)
         self.start.connect_requested.connect(self.connect_folder)
         self.start.song_chosen.connect(self.open_song)
-        self.start.share_requested.connect(self.share_project)
+        self.start.add_requested.connect(self.add_project)
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self.start)
@@ -179,30 +187,71 @@ class MainWindow(QMainWindow):
             self.start.refresh()
 
     def open_song(self, hub, song: str) -> None:
-        """Open a song from a shared folder, downloading it first if it is new here."""
+        """Open your copy of a shared song, getting it first if you do not have one."""
         local = self.settings.song_path(hub, song)
-        if not (local.is_dir() and LocalState.exists(local)):
-            try:
-                QApplication.setOverrideCursor(Qt.WaitCursor)
-                local = hubsync.join(hub, song, self.settings, load_identity())
-            except Exception as exc:  # noqa: BLE001 - shown, not raised
-                QMessageBox.warning(self, "Could not download that song", str(exc))
+        if local.is_dir() and LocalState.exists(local):
+            self.open_project(local)
+            return
+
+        found = hub.song(song)
+        me = self._me() or {}
+        working, _ = hubsync.others_on(found, me) if found else ([], [])
+        if working:
+            QMessageBox.information(
+                self,
+                f"{', '.join(working)} is working on it",
+                f"{', '.join(working)} is working on {song} right now.\n\n"
+                "Call each other first so you do not both record. You can still "
+                "get a copy once they are done.",
+            )
+            return
+        if found is not None and found.kind == "ready":
+            answer = QMessageBox.question(
+                self,
+                "Set up this project?",
+                f"'{song}' is a plain Ableton project in the shared folder.\n\n"
+                "I will set it up for sharing (this only adds a hidden folder inside it; "
+                "your files are not changed), then make your own copy on this Mac. "
+                "If the folder is big, this reads all of it, which can take a while.",
+                QMessageBox.Ok | QMessageBox.Cancel,
+            )
+            if answer != QMessageBox.Ok:
                 return
-            finally:
-                QApplication.restoreOverrideCursor()
+
+        parent = QFileDialog.getExistingDirectory(
+            self,
+            f"Where should your copy of {song} go on this Mac?",
+            str(self.settings.local_root()),
+        )
+        if not parent:
+            return
+        destination = Path(parent) / song
+        try:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            local = hubsync.join(hub, song, self.settings, load_identity(), destination)
+        except Exception as exc:  # noqa: BLE001 - shown, not raised
+            QMessageBox.warning(self, "Could not get that song", str(exc))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.start.refresh()
         self.open_project(local)
 
-    def share_project(self, hub) -> None:
+    def add_project(self, hub) -> None:
+        """Put a project from this Mac into a collaborator's shared folder."""
         folder = QFileDialog.getExistingDirectory(
-            self, f"Choose the Ableton project to share with {hub.name}"
+            self, f"Choose the Ableton project to add to {hub.name}"
         )
         if not folder:
             return
         try:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
             path = hubsync.share(hub, Path(folder), self.settings, load_identity())
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "Could not share that project", str(exc))
+            QMessageBox.warning(self, "Could not add that project", str(exc))
             return
+        finally:
+            QApplication.restoreOverrideCursor()
         self.start.refresh()
         self.open_project(path)
 
@@ -223,10 +272,29 @@ class MainWindow(QMainWindow):
             author = load_identity()
         except Exception:  # noqa: BLE001
             return
+        self._check_live(author)
         open_roots = {p.project_root for p in self.panes()}
         self._hub_check = _HubCheck(self.settings, author, open_roots, self)
         self._hub_check.done.connect(self._hub_news)
         self._hub_check.start()
+
+    def _check_live(self, author: dict) -> None:
+        """If Live just opened a set that someone else is on, say so once."""
+        from sessionsync.core import livewatch
+
+        try:
+            document = livewatch.open_document()
+            warning = hubsync.live_warning(self.settings, author, document)
+        except Exception:  # noqa: BLE001 - best effort only
+            return
+        if warning is None:
+            self._last_live_warning = None
+            return
+        if self._last_live_warning != (warning.song, warning.text):
+            self._last_live_warning = (warning.song, warning.text)
+            self.notifier.show(
+                warning.text, title=warning.hub.name, target=(warning.hub, warning.song, warning.path)
+            )
 
     def _hub_news(self, news: list) -> None:
         for item in news:
@@ -272,12 +340,22 @@ class MainWindow(QMainWindow):
         return None
 
     def _not_a_project(self, project_root: Path) -> None:
-        QMessageBox.warning(
+        from sessionsync.core.master import folder_kind
+
+        if folder_kind(project_root) == "master":
+            QMessageBox.information(
+                self,
+                "This is the shared copy",
+                f"'{project_root.name}' is the shared copy in the shared folder. Nobody "
+                "works in it directly.\n\nUse Get it on the collaborator list to make "
+                "your own copy, work there, and put it back when you are done.",
+            )
+            return
+        QMessageBox.information(
             self,
-            "Not set up yet",
-            f"'{project_root.name}' is not synced with SessionSync yet.\n\n"
-            "Set it up from the command line first:\n"
-            f"    sessionsync init '{project_root}' --remote <where the repository lives>",
+            "Not part of a shared folder yet",
+            f"'{project_root.name}' is not set up with a collaborator yet.\n\n"
+            "On the first screen, press Add a project… under the person you share with.",
         )
 
     # --- tab state -------------------------------------------------------
@@ -339,9 +417,9 @@ class MainWindow(QMainWindow):
         """Ask before walking away from work that only exists on this Mac."""
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
-        box.setText(f"{pane.project_name} has unpushed work.")
+        box.setText(f"{pane.project_name} has changes that are not put back.")
         box.setInformativeText(close_warning(pane.snapshot.status) or "")
-        push = box.addButton("Push First…", QMessageBox.AcceptRole)
+        push = box.addButton("Put Back First…", QMessageBox.AcceptRole)
         close = box.addButton("Close Anyway", QMessageBox.DestructiveRole)
         cancel = box.addButton("Cancel", QMessageBox.RejectRole)
         box.setDefaultButton(cancel)
@@ -356,7 +434,7 @@ class MainWindow(QMainWindow):
         names = "\n".join(f"   {pane.project_name}" for pane in panes)
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
-        box.setText(f"{len(panes)} projects have unpushed work.")
+        box.setText(f"{len(panes)} projects have changes that are not put back.")
         box.setInformativeText(
             f"{names}\n\nQuitting does not delete anything — the files stay in "
             "their project folders — but the work is not backed up, and nobody "

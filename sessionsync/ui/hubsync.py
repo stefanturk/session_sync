@@ -6,7 +6,7 @@ and just shows what comes back.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from sessionsync.core.hub import Hub, HubSong, compare_scans, pull_if_safe
@@ -33,16 +33,31 @@ class SongRow:
     hub: Hub
     song: HubSong
     local: Path
-    state: str  # "new" | "behind" | "current"
+    state: str  # "ready" | "new" | "behind" | "current"
     behind_by: int = 0
+    working: list = field(default_factory=list)  # names of others at it right now
+    unpushed: list = field(default_factory=list)  # names of others with changes not put back
 
     @property
     def label(self) -> str:
+        text = self._base_label
+        if self.unpushed and not self.working and self.state != "current":
+            text += f" · {', '.join(self.unpushed)} has changes not put back"
+        return text
+
+    @property
+    def _base_label(self) -> str:
+        if self.working:
+            return f"{', '.join(self.working)} is working on it now"
+        if self.state == "ready":
+            return "Ready to add · Get it"
         if self.state == "new":
-            return "New · not on this Mac yet"
+            return "Not on this Mac yet · Get it"
         if self.state == "behind":
             n = self.behind_by
-            return f"{n} new version{'s' if n != 1 else ''} to pull"
+            return f"{n} newer version{'s' if n != 1 else ''} to get"
+        if self.unpushed:
+            return f"{', '.join(self.unpushed)} has changes not put back"
         return "Up to date"
 
     @property
@@ -51,17 +66,72 @@ class SongRow:
         return " · ".join(b for b in bits if b)
 
 
-def song_rows(hub: Hub, settings: Settings) -> list[SongRow]:
+def song_rows(hub: Hub, settings: Settings, me: dict | None = None) -> list[SongRow]:
     rows = []
     for song in hub.songs():
         local = settings.song_path(hub, song.name)
         if local.is_dir() and LocalState.exists(local):
             base = LocalState.open(local).base_version
             behind = max(0, song.latest_version - base)
-            rows.append(SongRow(hub, song, local, "behind" if behind else "current", behind))
+            row = SongRow(hub, song, local, "behind" if behind else "current", behind)
         else:
-            rows.append(SongRow(hub, song, local, "new"))
+            row = SongRow(hub, song, local, "ready" if song.kind == "ready" else "new")
+        row.working, row.unpushed = others_on(song, me)
+        rows.append(row)
     return rows
+
+
+def others_on(song: HubSong, me: dict | None) -> tuple[list[str], list[str]]:
+    """Who else is at this song right now, and who has changes they have not put back."""
+    from sessionsync.core.session import ACTIVE_AFTER_SECONDS, UNPUSHED_STAYS_FOR_SECONDS, _parse
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    working, unpushed = [], []
+    mine = (me or {}).get("email")
+    for person in song.people:
+        if mine and person.get("user") == mine:
+            continue
+        beat = _parse(person.get("last_heartbeat"))
+        if beat is None:
+            continue
+        name = person.get("display_name") or "Someone"
+        if person.get("state") == "unpushed":
+            if now - beat <= timedelta(seconds=UNPUSHED_STAYS_FOR_SECONDS):
+                unpushed.append(name)
+        elif now - beat <= timedelta(seconds=ACTIVE_AFTER_SECONDS):
+            working.append(name)
+    return working, unpushed
+
+
+def live_warning(settings: Settings, author: dict, document: Path | None) -> News | None:
+    """Live just opened a set in a shared song: say if that is a bad idea.
+
+    Best effort: it needs this app running, and Drive can be a minute behind.
+    """
+    from sessionsync.core import livewatch
+    from sessionsync.core.master import folder_kind
+
+    if document is None:
+        return None
+    for hub in settings.hubs():
+        for song in hub.songs():
+            local = settings.song_path(hub, song.name)
+            if livewatch.is_open_in(song.path, document):
+                return News(
+                    f"You opened the shared copy of {song.name} directly. Work on your own "
+                    "copy instead (Get it), or Live will change what everyone else gets.",
+                    hub, song.name, None,
+                )
+            if local.is_dir() and livewatch.is_open_in(local, document):
+                working, _ = others_on(song, author)
+                if working:
+                    return News(
+                        f"{', '.join(working)} is working on {song.name} right now. "
+                        "Call each other before you both record.",
+                        hub, song.name, local,
+                    )
+    return None
 
 
 def check_hubs(settings: Settings, author: dict, open_roots: set[Path] | None = None) -> list[News]:
@@ -101,8 +171,8 @@ def _auto_pull(hub: Hub, song: str, settings: Settings, author: dict, open_roots
         return False
 
 
-def join(hub: Hub, song: str, settings: Settings, author: dict) -> Path:
-    repo = hub.join_song(song, settings.local_root(), author)
+def join(hub: Hub, song: str, settings: Settings, author: dict, destination: Path | None = None) -> Path:
+    repo = hub.join_song(song, settings.local_root(), author, destination)
     settings.set_song_path(hub, song, repo.project_root)
     return repo.project_root
 

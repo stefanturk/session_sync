@@ -85,6 +85,7 @@ class VersionSummary:
     deleted: list[str]
     size_change: int
     summary: str = ""
+    restorable: bool = True  # False once it is older than the last few that are kept
 
 
 class Repository:
@@ -264,6 +265,7 @@ class Repository:
 
     def history(self) -> list[VersionSummary]:
         summaries = []
+        pruned = getattr(self.storage, "pruned_versions", lambda: set())()
         previous: dict[str, FileEntry] = {}
         previous_bytes = 0
         previous_manifest: Manifest | None = None
@@ -281,6 +283,7 @@ class Repository:
                     deleted=diff.deleted,
                     size_change=manifest.total_bytes - previous_bytes,
                     summary=describe_version(previous_manifest, manifest),
+                    restorable=version not in pruned,
                 )
             )
             previous, previous_bytes = manifest.files, manifest.total_bytes
@@ -304,6 +307,8 @@ class Repository:
             raise FileExistsError(f"{destination} already exists; choose a new folder.")
         if version not in self.storage.list_versions():
             raise ValueError(f"There is no version {version}.")
+        if version in getattr(self.storage, "pruned_versions", lambda: set())():
+            raise ValueError(f"Version {version} is older than the versions that are kept.")
         manifest = self.read_manifest(version)
         destination.mkdir(parents=True)
         try:

@@ -74,3 +74,24 @@ def describe_version(previous: Manifest | None, current: Manifest) -> str:
     if previous is None:
         return summarise(diff_manifests(Manifest(0, current.repository_id), current), None, None, first=True)
     return summarise(diff_manifests(previous, current), None, None)
+
+
+def describe_catch_up(result) -> str:
+    """The plain-words report after catching up."""
+    lines = []
+    if result.theirs:
+        lines.append("They changed: " + ", ".join(result.theirs))
+    if result.mine:
+        lines.append("You changed: " + ", ".join(result.mine))
+    if result.overlap:
+        lines.append("You both changed: " + ", ".join(result.overlap) + ". Decide which you want.")
+    elif result.theirs and result.mine:
+        lines.append("You changed different tracks, so you can have both.")
+    lines.append("")
+    lines.append(f"Your version is saved untouched in:\n{result.aside}")
+    if result.my_set is not None:
+        lines.append(
+            f"\nIt is also beside the new set as “{result.my_set.name}”. Open both in Live "
+            "and drag the tracks you want across."
+        )
+    return "\n".join(lines)

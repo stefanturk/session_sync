@@ -46,7 +46,7 @@ class Screen:
     state_label: str = ""
 
 
-PULL_FIRST = "Pull latest first."
+PULL_FIRST = "Get the latest first."
 
 
 def screen(
@@ -67,7 +67,7 @@ def screen(
         banner=_banner(status.state, behind),
         presence=describe_sessions(status.active_sessions),
         pull=Button(
-            "Pull Latest",
+            "Catch Up" if status.state == "push_blocked" else "Get Latest",
             enabled=behind > 0,
             reason="" if behind else "You have the latest version — nothing new to pull.",
         ),
@@ -91,9 +91,9 @@ def _state_label(state: str, behind: int, session_open: bool) -> str:
     if state == "behind":
         return f"{behind} VERSION{'S' if behind != 1 else ''} BEHIND"
     if state == "push_blocked":
-        return "PULL REQUIRED"
+        return "CATCH UP"
     if state == "local_changes":
-        return "UNPUSHED WORK"
+        return "NOT PUT BACK"
     return "SESSION OPEN" if session_open else "UP TO DATE"
 
 
@@ -112,24 +112,24 @@ def _banner(state: str, behind: int) -> Banner:
     versions = f"{behind} version{'s' if behind != 1 else ''}"
     if state == "behind":
         return Banner(
-            f"You are {versions} behind — Pull latest before you start.", "warning"
+            f"You are {versions} behind — someone put back while you were away. Get the latest before you start.", "warning"
         )
     if state == "push_blocked":
         return Banner(
-            f"You are {versions} behind and you have unpushed work. "
-            "Pull latest first — your own recordings are kept.",
+            f"Someone put back {versions} while you were working. Catch Up saves your "
+            "version first, then brings theirs — nothing is lost.",
             "danger",
         )
     if state == "local_changes":
-        return Banner("You have work that has not been pushed yet.", "info")
+        return Banner("You have work that has not been put back yet.", "info")
     return Banner("Up to date.", "ok")
 
 
 def _session_button(session_open: bool, behind: int) -> Button:
     if session_open:
-        return Button("End Session", enabled=True)
+        return Button("Done Working", enabled=True)
     return Button(
-        "Start Session",
+        "Start Working",
         enabled=behind == 0,
         reason="" if behind == 0 else f"This project has moved on. {PULL_FIRST}",
     )
@@ -137,9 +137,9 @@ def _session_button(session_open: bool, behind: int) -> Button:
 
 def _push_button(changed: bool, behind: int) -> Button:
     if behind:
-        return Button("Push Session", enabled=False, reason=f"Someone pushed first. {PULL_FIRST}")
+        return Button("Put Back", enabled=False, reason=f"Someone put back first. {PULL_FIRST}")
     return Button(
-        "Push Session",
+        "Put Back",
         enabled=changed,
         reason="" if changed else "Nothing has changed since your last push.",
     )

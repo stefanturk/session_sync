@@ -34,6 +34,11 @@ def world(qt_app, tmp_path, monkeypatch):
     folder.mkdir(parents=True)
     hub = settings.add_hub(folder, "Sam")
     hub.add_song("Song B", write_project(tmp_path / "sam" / "Song B", "Song B"), BOB)
+    from PySide6.QtWidgets import QFileDialog
+
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(tmp_path / "music" / "Sam"))
+    )
     window = MainWindow(settings)
     yield window, settings, hub
     window.close_everything()

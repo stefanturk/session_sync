@@ -31,11 +31,12 @@ class StartScreen(QWidget):
     open_requested = Signal()
     connect_requested = Signal()
     song_chosen = Signal(object, str)  # Hub, song name
-    share_requested = Signal(object)  # Hub
+    add_requested = Signal(object)  # Hub
 
-    def __init__(self, settings: Settings, parent: QWidget | None = None):
+    def __init__(self, settings: Settings, parent: QWidget | None = None, me: dict | None = None):
         super().__init__(parent)
         self.settings = settings
+        self.me = me
         self._build()
 
     def _build(self) -> None:
@@ -49,7 +50,7 @@ class StartScreen(QWidget):
         wordmark.setAlignment(Qt.AlignCenter)
         column.addWidget(wordmark)
 
-        tagline = QLabel("Pull, work, push — for Ableton projects.")
+        tagline = QLabel("Get it, work on it, put it back — for Ableton projects.")
         tagline.setObjectName("tagline")
         tagline.setAlignment(Qt.AlignCenter)
         column.addWidget(tagline)
@@ -124,9 +125,9 @@ class StartScreen(QWidget):
             header.setFlags(Qt.NoItemFlags)
             header.setSizeHint(QSize(0, 48))
             self.collab.addItem(header)
-            self.collab.setItemWidget(header, _HubHeader(hub, self.share_requested.emit))
+            self.collab.setItemWidget(header, _HubHeader(hub, self.add_requested.emit))
             rows += 1
-            songs = hubsync.song_rows(hub, self.settings)
+            songs = hubsync.song_rows(hub, self.settings, self.me)
             for row in songs:
                 item = QListWidgetItem()
                 item.setData(Qt.UserRole, (hub, row.song.name))
@@ -139,7 +140,7 @@ class StartScreen(QWidget):
                 note.setFlags(Qt.NoItemFlags)
                 note.setSizeHint(QSize(0, 30))
                 self.collab.addItem(note)
-                label = QLabel("  No songs shared here yet.")
+                label = QLabel("  No Ableton projects in this folder yet.")
                 label.setObjectName("recentPath")
                 self.collab.setItemWidget(note, label)
                 rows += 1
@@ -166,7 +167,7 @@ class _HubHeader(QWidget):
         name = QLabel(hub.name)
         name.setObjectName("recentName")
         row.addWidget(name, 1)
-        share = QPushButton("Share a project…")
+        share = QPushButton("Add a project…")
         share.setCursor(Qt.PointingHandCursor)
         share.setFixedHeight(34)
         share.setStyleSheet("padding: 2px 14px; font-size: 11px;")

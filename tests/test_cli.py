@@ -266,3 +266,27 @@ class TestSharedFolders:
     def test_unknown_hub_is_explained(self):
         result = run("song", "join", "Nobody", "x")
         assert result.exit_code == 1 and "No shared folder called 'Nobody'" in result.output
+
+
+def test_song_get_to_a_chosen_folder_and_pin(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from sessionsync.cli import app
+    from tests.conftest import write_project
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SESSIONSYNC_HOME", str(tmp_path / "ssh"))
+    monkeypatch.setenv("SESSIONSYNC_NAME", "Alice")
+    monkeypatch.setenv("SESSIONSYNC_EMAIL", "alice@example.com")
+    runner = CliRunner()
+    hub = tmp_path / "Drive" / "Sam"
+    hub.mkdir(parents=True)
+    write_project(hub / "Plain", "Plain")  # a plain project already in the shared folder
+
+    assert runner.invoke(app, ["hub", "add", str(hub)]).exit_code == 0
+    got = runner.invoke(app, ["song", "get", "Sam", "Plain", "--to", str(tmp_path / "anywhere" / "Plain")])
+    assert got.exit_code == 0, got.output
+    assert (tmp_path / "anywhere" / "Plain" / "Plain.als").exists()
+
+    pinned = runner.invoke(app, ["pin", "1", "-p", str(tmp_path / "anywhere" / "Plain")])
+    assert pinned.exit_code == 0, pinned.output

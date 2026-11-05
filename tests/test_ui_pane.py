@@ -57,7 +57,7 @@ def test_a_freshly_pushed_project_reads_as_up_to_date(pane, alice, identity):
 
     assert pane.title_label.text() == "My Song"
     assert "Up to date" in pane.banner.text()
-    assert pane.session_button.text() == "START SESSION"
+    assert pane.session_button.text() == "START WORKING"
     assert not pane.push_button.isEnabled()
 
 
@@ -82,7 +82,7 @@ def test_being_behind_disables_starting_a_session(pane, alice, bob, identity):
     assert "behind" in pane.banner.text()
     assert not pane.session_button.isEnabled()
     assert pane.pull_button.isEnabled()
-    assert "Pull latest" in pane.session_button.toolTip()
+    assert "Get the latest" in pane.session_button.toolTip()
 
 
 def test_someone_else_working_is_shown_on_the_presence_line(pane, alice, bob, identity):

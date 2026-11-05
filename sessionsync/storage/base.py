@@ -13,8 +13,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
+from sessionsync.core.errors import SessionSyncError
 
-class StorageError(Exception):
+
+class StorageError(SessionSyncError):
     """Something went wrong talking to the storage backend."""
 
 

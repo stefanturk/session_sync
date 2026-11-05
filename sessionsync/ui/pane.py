@@ -49,6 +49,7 @@ from sessionsync.core.errors import (
 )
 from sessionsync.core.session import HEARTBEAT_SECONDS
 from sessionsync.ui import theme
+from sessionsync.ui.dialogs import ask_put_back, describe_catch_up
 from sessionsync.ui.engine import Engine, Snapshot
 from sessionsync.ui.notify import notify
 from sessionsync.ui.presenter import human_size, local_time, notifications, screen
@@ -83,6 +84,7 @@ class ProjectPane(QWidget):
     request_review = Signal()
     request_history = Signal()
     request_restore = Signal(int, str)
+    request_catch_up = Signal()
 
     #: level, state_label — so the shell can colour the tab and title the window
     state_changed = Signal(str, str)
@@ -236,7 +238,7 @@ class ProjectPane(QWidget):
             button.setCursor(Qt.PointingHandCursor)
             buttons.addWidget(button)
 
-        self.pull_button.clicked.connect(lambda: self.request_pull.emit(False))
+        self.pull_button.clicked.connect(self._pull_clicked)
         self.session_button.clicked.connect(self._toggle_session)
         self.review_button.clicked.connect(self.request_review.emit)
         self.push_button.clicked.connect(self._ask_for_note_and_push)
@@ -287,6 +289,7 @@ class ProjectPane(QWidget):
         self.request_review.connect(self.engine.review)
         self.request_history.connect(self.engine.history)
         self.request_restore.connect(self.engine.restore)
+        self.request_catch_up.connect(self.engine.catch_up)
 
         self.engine.snapshot_ready.connect(self._show)
         self.engine.operation_done.connect(self._operation_done)
@@ -449,19 +452,39 @@ class ProjectPane(QWidget):
         else:
             self.request_start_session.emit()
 
-    def _ask_for_note_and_push(self) -> None:
-        note, accepted = QInputDialog.getText(
-            self, "Push Session", "What did you do this session?"
+    def _pull_clicked(self) -> None:
+        state = self.snapshot.status.state if self.snapshot else ""
+        if state != "push_blocked":
+            self.request_pull.emit(False)
+            return
+        answer = QMessageBox.question(
+            self,
+            "Catch up",
+            "Someone put back a newer version while you were working.\n\n"
+            "I will save a full copy of YOUR version next to this project first, then "
+            "bring theirs in. Nothing is put back until you say so.",
+            QMessageBox.Ok | QMessageBox.Cancel,
         )
-        if accepted:
-            self.request_push.emit(note.strip())
+        if answer == QMessageBox.Ok:
+            self.request_catch_up.emit()
+
+    def _ask_for_note_and_push(self) -> None:
+        snapshot = self.snapshot
+        note = ask_put_back(
+            self,
+            self.project_name,
+            snapshot.media_outside if snapshot else [],
+            snapshot.media_missing if snapshot else [],
+        )
+        if note is not None:
+            self.request_push.emit(note)
 
     # --- results ---------------------------------------------------------
 
     def _operation_done(self, name: str, result) -> None:
         if name == "push":
             self._say(
-                f"Pushed v{result.version} — {human_size(result.uploaded_bytes)} uploaded.",
+                f"Put back as v{result.version} — {human_size(result.uploaded_bytes)} sent.",
                 15000,
             )
         elif name == "pull":
@@ -469,10 +492,13 @@ class ProjectPane(QWidget):
                 self._say("Already on the latest version.", 8000)
             else:
                 self._say(f"Updated to v{result.to_version}.", 15000)
+        elif name == "catch_up":
+            self._say(f"Caught up to v{result.pulled.to_version}.", 15000)
+            QMessageBox.information(self, "You are caught up", describe_catch_up(result))
         elif name == "start_session":
-            self._say("Session started. Go and make some noise.", 8000)
+            self._say("Marked as working. Go and make some noise.", 8000)
         elif name == "end_session":
-            self._say("Session ended. Nothing was uploaded.", 8000)
+            self._say("Done. Nothing was put back.", 8000)
         elif name == "review":
             self._show_review(result)
         elif name == "history":
@@ -492,7 +518,7 @@ class ProjectPane(QWidget):
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
         if isinstance(error, (StalePushError, ProjectBehindError)):
-            box.setText("Someone else pushed first.")
+            box.setText("Someone else put back first.")
             box.setInformativeText(str(error))
         else:
             box.setText("That did not work.")
@@ -638,6 +664,7 @@ def show_history(parent, text: str, entries) -> int | None:
     picked: list[int] = []
 
     def ask() -> None:
+        entries = [e for e in entries if getattr(e, "restorable", True)]
         labels = [f"v{e.version} \u2014 {e.summary or 'no summary'}" for e in entries]
         label, ok = QInputDialog.getItem(
             dialog, "Restore a Copy", "Which version?", labels, 0, False
@@ -647,6 +674,6 @@ def show_history(parent, text: str, entries) -> int | None:
             dialog.accept()
 
     restore.clicked.connect(ask)
-    restore.setEnabled(bool(entries))
+    restore.setEnabled(any(getattr(e, 'restorable', True) for e in entries))
     dialog.exec()
     return picked[0] if picked else None

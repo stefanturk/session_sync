@@ -19,6 +19,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal, Slot
 
 from sessionsync.auth.identity import load_identity
+from sessionsync.core import livewatch
 from sessionsync.core.repository import Repository, Status
 
 
@@ -79,20 +80,24 @@ class Engine(QObject):
         here to prevent.
         """
         repo = self._repo
-        if repo is None or not repo.state.session:
+        if repo is None:
             return
         try:
-            repo.end_session()
+            if repo.state.session and not repo.state.session.get("auto"):
+                repo.end_session()
+            # Leaves "unpushed changes" for the others to see, or clears the note.
+            repo.refresh_presence(live_here=False)
         except Exception:  # noqa: BLE001 - nothing useful to do while closing
             pass
 
     @Slot()
     def heartbeat(self) -> None:
         repo = self._repo
-        if repo is None or not repo.state.session:
+        if repo is None:
             return
         try:
-            repo.heartbeat()
+            live_here = livewatch.is_open_in(repo.project_root, livewatch.open_document())
+            repo.refresh_presence(live_here)
         except Exception:  # noqa: BLE001 - a missed heartbeat is not worth a dialog
             pass
 
@@ -116,6 +121,10 @@ class Engine(QObject):
             "Pulling…",
             lambda: self._repository().pull(replace_my_versions=replace_my_versions),
         )
+
+    @Slot()
+    def catch_up(self) -> None:
+        self._run("catch_up", "Saving your version and catching up…", lambda: self._repository().catch_up())
 
     @Slot()
     def review(self) -> None:
