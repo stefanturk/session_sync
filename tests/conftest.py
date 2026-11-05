@@ -70,5 +70,10 @@ def no_real_notifications(monkeypatch):
         from sessionsync.ui import notify as notify_module
     except Exception:  # Qt-free environments
         return calls
-    monkeypatch.setattr(notify_module.subprocess, "run", lambda *a, **k: calls.append(a))
+    import types
+
+    stub = types.SimpleNamespace(
+        run=lambda *a, **k: calls.append(a), SubprocessError=notify_module.subprocess.SubprocessError
+    )
+    monkeypatch.setattr(notify_module, "subprocess", stub)  # only this module; others keep the real one
     return calls

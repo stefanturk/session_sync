@@ -333,6 +333,7 @@ class Repository:
         if remote_version > self.base_version and not force:
             raise ProjectBehindError(self.base_version, remote_version)
 
+        self._end_session_marker()  # an automatic note of ours gives way to the real session
         session = build_session(self.author, self.base_version, new_session_key(self.author))
         self.state.session = session
         self.state.baseline = {p: e.to_dict() for p, e in self.scan().items()}
@@ -359,13 +360,18 @@ class Repository:
         """
         from sessionsync.core.session import build_session, new_session_key
 
+        existing = self.state.session
+        if existing and not existing.get("auto"):
+            self.heartbeat()  # a session started by hand keeps its own note
+            return existing.get("state")
         diff = diff_file_maps(self.base_files(), self.scan())
         if not live_here and not diff.has_changes:
             self._end_session_marker()
             return None
-        session = self.state.session or build_session(
+        session = existing or build_session(
             self.author, self.base_version, new_session_key(self.author)
         )
+        session["auto"] = True
         previous = session.get("state")
         session["state"] = "working" if live_here else "unpushed"
         session["last_heartbeat"] = _now()
@@ -505,6 +511,50 @@ class Repository:
         self.state.baseline = None
         return PullResult(from_version, target_version, diff, downloaded)
 
+    # --- being behind ---------------------------------------------------
+
+    def catch_up(self, aside_parent: Path | None = None) -> "CatchUp":
+        """Someone put back first. Keep my version, bring theirs, say who did what.
+
+        1. My whole project is copied aside (a clone on APFS, so it costs little).
+        2. Their latest version replaces mine in the project; anything replaced also
+           goes to the local trash.
+        3. My Live Set is kept next to theirs as "<name> (mine).als", so both can be
+           opened and tracks dragged across.
+        Nothing is put back: that stays a deliberate step.
+        """
+        target = self.remote_version()
+        if target == self.base_version:
+            raise ValueError("You already have the latest version.")
+        mine_tracks = self._track_fingerprints() or {}
+        base_tracks = self._base_tracks() or {}
+        their_tracks = self.read_manifest(target).tracks or {}
+        info = self.adapter.inspect_project(self.project_root)
+        my_set = info.primary_set
+
+        parent = Path(aside_parent) if aside_parent else self.project_root.parent
+        stamp = datetime.now().strftime("%Y-%m-%d %H%M")
+        aside = _free_name(parent / f"{self.project_root.name} (mine before v{target}, {stamp})")
+        _clone_tree(self.project_root, aside, skip={".sessionsync"})
+
+        saved_set = None
+        if my_set is not None:
+            saved_set = my_set.read_bytes()
+        pulled = self.pull(replace_my_versions=True)
+
+        beside = None
+        if saved_set is not None and my_set is not None:
+            beside = _free_name(my_set.with_name(f"{my_set.stem} (mine).als"))
+            beside.write_bytes(saved_set)
+
+        return CatchUp(
+            aside=aside,
+            my_set=beside,
+            pulled=pulled,
+            theirs=_track_changes(base_tracks, their_tracks),
+            mine=_track_changes(base_tracks, mine_tracks),
+        )
+
     # --- local safety ---------------------------------------------------
 
     def changes_a_pull_would_replace(self, target: Manifest) -> list[str]:
@@ -546,6 +596,65 @@ class Repository:
         if session:
             self.storage.delete_session(session["key"])
             self.state.session = None
+
+
+@dataclass
+class CatchUp:
+    aside: Path
+    my_set: Path | None
+    pulled: "PullResult"
+    theirs: list[str]  # "Added Sax", "Changed Drums" ...
+    mine: list[str]
+
+    @property
+    def overlap(self) -> list[str]:
+        """Tracks both of you changed: the ones that need a human decision."""
+        names = lambda items: {i.split(" ", 1)[1] for i in items}
+        return sorted(names(self.theirs) & names(self.mine))
+
+
+def _track_changes(before: dict[str, str], after: dict[str, str]) -> list[str]:
+    changes = []
+    for name in sorted(set(after) - set(before)):
+        changes.append(f"Added {name}")
+    for name in sorted(set(before) & set(after)):
+        if before[name] != after[name]:
+            changes.append(f"Changed {name}")
+    for name in sorted(set(before) - set(after)):
+        changes.append(f"Removed {name}")
+    return changes
+
+
+def _free_name(path: Path) -> Path:
+    candidate, n = path, 2
+    while candidate.exists():
+        candidate = path.with_name(f"{path.stem} {n}{path.suffix}")
+        n += 1
+    return candidate
+
+
+def _clone_tree(source: Path, dest: Path, *, skip: set[str]) -> None:
+    """Copy a folder, using filesystem clones where the Mac offers them."""
+    import subprocess
+    import sys
+
+    dest.mkdir(parents=True)
+    try:
+        for entry in sorted(source.iterdir()):
+            if entry.name in skip:
+                continue
+            target = dest / entry.name
+            if sys.platform == "darwin":
+                result = subprocess.run(["cp", "-cR", str(entry), str(target)], capture_output=True)
+                if result.returncode == 0:
+                    continue
+            if entry.is_dir():
+                shutil.copytree(entry, target)
+            else:
+                shutil.copy2(entry, target)
+    except BaseException:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise
 
 
 def _one_file_per_hash(files: dict[str, FileEntry], *, skip: set[str]) -> list[FileEntry]:

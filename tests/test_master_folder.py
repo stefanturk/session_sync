@@ -293,3 +293,57 @@ def test_unpushed_does_not_fade_with_silence(master, alice_wb, bob_wb):
     record["state"] = "working"
     master.write_session(key, record)
     assert alice_wb.other_sessions() == []
+
+
+# --- being behind ------------------------------------------------------------
+
+def test_catch_up_keeps_my_version_and_reports_who_did_what(tmp_path, master, alice_wb, bob_wb):
+    from tests.conftest import als_with_tracks
+
+    # both start from v1 with two tracks
+    (alice_wb.project_root / "My Song.als").write_bytes(als_with_tracks({"Guitar": "1", "Drums": "1"}))
+    alice_wb.push()
+    bob_wb.pull()
+
+    (alice_wb.project_root / "My Song.als").write_bytes(als_with_tracks({"Guitar": "1", "Drums": "1", "Sax": "1"}))
+    alice_wb.push()                                             # Alice adds Sax first
+
+    (bob_wb.project_root / "My Song.als").write_bytes(als_with_tracks({"Guitar": "2", "Drums": "1"}))
+    (bob_wb.project_root / "Samples/Recorded/Guitar2.wav").write_bytes(b"g2")  # Bob re-records guitar
+
+    result = bob_wb.catch_up()
+
+    assert result.theirs == ["Added Sax"]
+    assert result.mine == ["Changed Guitar"]
+    assert result.overlap == []
+    assert result.aside.is_dir() and (result.aside / "Samples/Recorded/Guitar2.wav").read_bytes() == b"g2"
+    assert not (result.aside / ".sessionsync").exists()
+    assert result.my_set.name == "My Song (mine).als"
+    assert result.my_set.read_bytes() == als_with_tracks({"Guitar": "2", "Drums": "1"})
+    assert bob_wb.base_version == 3
+    assert (bob_wb.project_root / "Samples/Recorded/Guitar2.wav").read_bytes() == b"g2"  # my recording kept
+    assert master.current_version() == 3  # nothing was put back
+
+
+def test_catch_up_flags_tracks_both_changed(tmp_path, master, alice_wb, bob_wb):
+    from tests.conftest import als_with_tracks
+
+    (alice_wb.project_root / "My Song.als").write_bytes(als_with_tracks({"Guitar": "1"}))
+    alice_wb.push()
+    bob_wb.pull()
+    (alice_wb.project_root / "My Song.als").write_bytes(als_with_tracks({"Guitar": "A"}))
+    alice_wb.push()
+    (bob_wb.project_root / "My Song.als").write_bytes(als_with_tracks({"Guitar": "B"}))
+    assert bob_wb.catch_up().overlap == ["Guitar"]
+
+
+def test_catch_up_when_already_current_is_refused(alice_wb):
+    with pytest.raises(ValueError):
+        alice_wb.catch_up()
+
+
+def test_hand_started_session_is_not_replaced_by_automatic_presence(alice_wb):
+    alice_wb.start_session()
+    key = alice_wb.state.session["key"]
+    assert alice_wb.refresh_presence(live_here=False) == "working"
+    assert alice_wb.state.session["key"] == key
