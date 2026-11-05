@@ -55,3 +55,19 @@ def als_with_tracks(tracks: dict[str, str]) -> bytes:
     return gzip.compress(
         f"<Ableton MinorVersion='11.0_11300'><LiveSet><Tracks>{body}</Tracks></LiveSet></Ableton>".encode()
     )
+
+
+@pytest.fixture(autouse=True)
+def no_real_notifications(monkeypatch):
+    """Tests must never pop real macOS banners ("My Song: Bob finished working").
+
+    Everything that notifies goes through subprocess.run in ui.notify, so stub
+    that one call. tests/test_ui_notify.py still checks the script text itself.
+    """
+    calls = []
+    try:
+        from sessionsync.ui import notify as notify_module
+    except Exception:  # Qt-free environments
+        return calls
+    monkeypatch.setattr(notify_module.subprocess, "run", lambda *a, **k: calls.append(a))
+    return calls

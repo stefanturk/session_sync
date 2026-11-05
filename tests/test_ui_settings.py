@@ -74,3 +74,24 @@ def test_a_corrupt_settings_file_does_not_stop_the_app_opening(settings):
     settings.path.write_text("{not json", encoding="utf-8")
 
     assert Settings().recent_projects() == []
+
+
+def test_hubs_are_remembered_and_forgotten(settings, tmp_path):
+    folder = tmp_path / "Sam Stefan Sketches"
+    folder.mkdir()
+    hub = settings.add_hub(folder, "Sam")
+    settings.add_hub(folder, "Sam")  # connecting twice does not duplicate
+    assert [(h.name, h.path) for h in settings.hubs()] == [("Sam", folder)]
+
+    assert settings.seen(hub) is None
+    settings.set_seen(hub, {"Song A": 3})
+    assert settings.seen(hub) == {"Song A": 3}
+
+    settings.remove_hub(hub)
+    assert settings.hubs() == [] and settings.seen(hub) is None
+
+
+def test_local_root_defaults_outside_desktop_and_drive(settings, tmp_path):
+    assert settings.local_root().parts[-3:] == ("Music", "Ableton", "SessionSync")
+    settings.set_local_root(tmp_path / "mine")
+    assert settings.local_root() == tmp_path / "mine"

@@ -21,6 +21,10 @@ from sessionsync.storage import storage_from_location
 app = typer.Typer(add_completion=False, help="Pull, work, push — for Ableton projects.")
 session_app = typer.Typer(help="Working sessions.")
 app.add_typer(session_app, name="session")
+hub_app = typer.Typer(help="Shared folders you collaborate through.")
+app.add_typer(hub_app, name="hub")
+song_app = typer.Typer(help="Songs inside a shared folder.")
+app.add_typer(song_app, name="song")
 
 PROJECT_OPTION = typer.Option(Path.cwd, "--project", "-p", help="The project folder.")
 
@@ -268,10 +272,22 @@ def history(project: Path = PROJECT_OPTION) -> None:
         when = local_time(entry.created_at)
         note = entry.note or "(no note)"
         typer.echo(f"v{entry.version}  {when}  {who} — {note}")
-        typer.echo(
-            f"      {len(entry.added)} added, {len(entry.modified)} changed, "
-            f"{len(entry.deleted)} removed"
-        )
+        typer.echo(f"      {entry.summary}")
+
+
+@app.command()
+def restore(
+    version: int = typer.Argument(..., help="The version to bring back."),
+    to: Path = typer.Option(..., "--to", help="A NEW folder to build it in."),
+    project: Path = PROJECT_OPTION,
+) -> None:
+    """Rebuild an earlier version in a separate folder. Your project is untouched."""
+    repo = _open(project)
+    try:
+        folder = repo.restore_copy(version, to)
+    except (FileExistsError, ValueError) as exc:
+        _fail(exc)
+    typer.echo(f"v{version} is in {folder}. Your current project was not changed.")
 
 
 @app.command()
@@ -309,6 +325,97 @@ def session_end(project: Path = PROJECT_OPTION) -> None:
     repo = _open(project)
     repo.end_session()
     typer.echo("Session ended. Nothing was uploaded.")
+
+
+# --- shared folders -------------------------------------------------------
+
+
+def _settings():
+    from sessionsync.ui.settings import Settings
+
+    return Settings()
+
+
+def _find_hub(name: str):
+    for hub in _settings().hubs():
+        if hub.name.lower() == name.lower():
+            return hub
+    _fail(f"No shared folder called '{name}'. See: sessionsync hub list")
+
+
+@hub_app.command("add")
+def hub_add(
+    folder: Path = typer.Argument(..., help="The shared folder (e.g. in Google Drive)."),
+    name: str = typer.Option(None, "--name", help="What to call it (default: the folder name)."),
+) -> None:
+    """Connect a collaborator's shared folder once; its songs appear automatically."""
+    if not folder.expanduser().is_dir():
+        _fail(f"{folder} is not a folder.")
+    hub = _settings().add_hub(folder, name)
+    typer.echo(f"Connected '{hub.name}' ({len(hub.songs())} song(s) found).")
+
+
+@hub_app.command("list")
+def hub_list() -> None:
+    """Shared folders you have connected, with the songs in each."""
+    hubs = _settings().hubs()
+    if not hubs:
+        typer.echo("No shared folders yet. Connect one with: sessionsync hub add <folder>")
+    for hub in hubs:
+        typer.echo(f"{hub.name}  ({hub.path})")
+        for song in hub.songs():
+            who = f" — {song.latest_author}" if song.latest_author else ""
+            typer.echo(f"   {song.name}  v{song.latest_version}{who}")
+
+
+@hub_app.command("news")
+def hub_news() -> None:
+    """What changed in your shared folders since you last looked."""
+    from sessionsync.core.hub import compare_scans
+
+    settings = _settings()
+    nothing = True
+    for hub in settings.hubs():
+        events, seen = compare_scans(hub, settings.seen(hub))
+        settings.set_seen(hub, seen)
+        for event in events:
+            nothing = False
+            if event.kind == "new_song":
+                typer.echo(f"{hub.name}: new song '{event.song}'")
+            else:
+                for author, text in zip(event.authors, event.summaries):
+                    typer.echo(f"{hub.name}: {author} on '{event.song}' — {text}")
+    if nothing:
+        typer.echo("Nothing new.")
+
+
+@song_app.command("new")
+def song_new(
+    hub_name: str = typer.Argument(..., help="Which shared folder."),
+    project: Path = typer.Argument(..., help="Your Ableton project folder."),
+    name: str = typer.Option(None, "--name", help="Song name (default: the project folder name)."),
+) -> None:
+    """Share one of your Ableton projects through a shared folder."""
+    hub = _find_hub(hub_name)
+    try:
+        repo = hub.add_song(name or project.name, project, load_identity())
+    except (SessionSyncError, FileExistsError) as exc:
+        _fail(exc)
+    typer.echo(f"'{repo.project_root.name}' is now shared in {hub.name} (v{repo.base_version}).")
+
+
+@song_app.command("join")
+def song_join(
+    hub_name: str = typer.Argument(..., help="Which shared folder."),
+    song: str = typer.Argument(..., help="The song to download."),
+) -> None:
+    """Download a song from a shared folder onto this Mac."""
+    hub = _find_hub(hub_name)
+    try:
+        repo = hub.join_song(song, _settings().local_root(), load_identity())
+    except (SessionSyncError, FileExistsError) as exc:
+        _fail(exc)
+    typer.echo(f"Downloaded '{song}' to {repo.project_root}.")
 
 
 if __name__ == "__main__":

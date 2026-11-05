@@ -225,3 +225,44 @@ class TestWho:
         result = run("who", "--project", synced)
 
         assert "Nobody else" in result.stdout
+
+
+class TestSharedFolders:
+    @pytest.fixture
+    def hub_dir(self, tmp_path):
+        folder = tmp_path / "Drive" / "Sam Stefan Sketches"
+        folder.mkdir(parents=True)
+        (folder / "loose bounce.mp3").write_bytes(b"x")
+        return folder
+
+    def test_connect_share_and_see_news(self, hub_dir, song, tmp_path, monkeypatch):
+        assert "0 song" in run("hub", "add", hub_dir, "--name", "Sam").output
+        assert run("hub", "news").output.strip() == "Nothing new."  # first look = starting point
+
+        assert "now shared in Sam" in run("song", "new", "Sam", song).output
+        news = run("hub", "news").output
+        assert "new song 'My Song'" in news
+
+        listing = run("hub", "list").output
+        assert "Sam" in listing and "My Song  v1" in listing
+        assert "loose bounce" not in listing
+
+    def test_join_downloads_under_the_local_root(self, hub_dir, song, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))  # never touch the real one
+        run("hub", "add", hub_dir, "--name", "Sam")
+        run("song", "new", "Sam", song)
+        result = run("song", "join", "Sam", "My Song")
+        assert result.exit_code == 0
+        expected = tmp_path / "home" / "Music" / "Ableton" / "SessionSync" / "Sam" / "My Song"
+        assert (expected / "My Song.als").exists()
+
+    def test_restore_builds_a_separate_copy(self, synced, tmp_path):
+        result = run("restore", 1, "--to", tmp_path / "copy", "--project", synced)
+        assert result.exit_code == 0
+        assert (tmp_path / "copy" / "My Song.als").exists()
+        again = run("restore", 1, "--to", tmp_path / "copy", "--project", synced)
+        assert again.exit_code == 1 and "already exists" in again.output
+
+    def test_unknown_hub_is_explained(self):
+        result = run("song", "join", "Nobody", "x")
+        assert result.exit_code == 1 and "No shared folder called 'Nobody'" in result.output
