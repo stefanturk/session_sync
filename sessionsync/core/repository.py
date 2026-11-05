@@ -350,6 +350,44 @@ class Repository:
         self.state.session = session
         self.storage.write_session(session["key"], session)
 
+    def refresh_presence(self, live_here: bool) -> str | None:
+        """Keep the shared copy's "who is doing what" note true. Returns the state.
+
+        Live open on this song  -> "working".
+        Changes not put back    -> "unpushed" (stays until put back or discarded).
+        Neither                 -> the note is removed.
+        """
+        from sessionsync.core.session import build_session, new_session_key
+
+        diff = diff_file_maps(self.base_files(), self.scan())
+        if not live_here and not diff.has_changes:
+            self._end_session_marker()
+            return None
+        session = self.state.session or build_session(
+            self.author, self.base_version, new_session_key(self.author)
+        )
+        previous = session.get("state")
+        session["state"] = "working" if live_here else "unpushed"
+        session["last_heartbeat"] = _now()
+        session["base_version"] = self.base_version
+        if diff.has_changes:
+            session["changed"] = summarise(
+                diff, self._base_tracks(), self._track_fingerprints()
+            ) or None
+            if previous != "unpushed" or not session.get("unpushed_since"):
+                session["unpushed_since"] = _now()
+        else:
+            session.pop("changed", None)
+            session.pop("unpushed_since", None)
+        self.state.session = session
+        self.storage.write_session(session["key"], session)
+        return session["state"]
+
+    def _base_tracks(self):
+        if self.base_version == 0:
+            return None
+        return self.read_manifest(self.base_version).tracks
+
     def end_session(self) -> None:
         self._end_session_marker()
         self.state.baseline = None

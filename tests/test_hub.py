@@ -98,8 +98,9 @@ def test_a_version_still_arriving_from_drive_is_caught_next_time(tmp_path):
     hub = make_hub(tmp_path)
     hub.add_song("S", write_project(tmp_path / "me" / "S", "S"), ALICE)
     _, seen = compare_scans(hub, None)
-    manifests = hub.path / "S" / "manifests"
+    manifests = hub.path / "S" / ".sessionsync" / "manifests"
     (manifests / "v000002.json").write_text("{ half written")  # Drive mid-sync
+    (manifests / "v000002.committed").write_text("")
     events, seen2 = compare_scans(hub, seen)
     assert events == [] and seen2 == {"S": 1}
 
@@ -122,3 +123,30 @@ def test_add_song_refuses_a_name_in_use(tmp_path):
     hub.add_song("S", p, ALICE)
     with pytest.raises(FileExistsError):
         hub.add_song("S", p, ALICE)
+
+
+def test_a_plain_project_in_the_hub_is_listed_ready_and_untouched(tmp_path):
+    hub = make_hub(tmp_path)
+    project = write_project(hub.path / "Plain Project", "Plain")
+    before = {p.relative_to(project).as_posix(): p.read_bytes() for p in project.rglob("*") if p.is_file()}
+
+    [song] = hub.songs()
+    assert (song.name, song.kind) == ("Plain Project", "ready")
+    assert {p.relative_to(project).as_posix(): p.read_bytes() for p in project.rglob("*") if p.is_file()} == before
+
+
+def test_getting_a_ready_project_sets_it_up_in_place_then_copies(tmp_path):
+    hub = make_hub(tmp_path)
+    write_project(hub.path / "Plain Project", "Plain")
+    wb = hub.join_song("Plain Project", tmp_path / "mine", BOB)
+    assert hub.songs()[0].kind == "shared"
+    assert (wb.project_root / "Plain.als").exists()
+    assert not (hub.path / "Plain Project" / ".sessionsync" / "state.db").exists()
+
+
+def test_people_notes_show_on_the_song(tmp_path):
+    hub = make_hub(tmp_path)
+    mine = hub.add_song("S", write_project(tmp_path / "me" / "S", "S"), ALICE)
+    (mine.project_root / "Samples" / "Recorded" / "x.wav").write_bytes(b"x")
+    mine.refresh_presence(live_here=False)
+    assert hub.songs()[0].people[0]["state"] == "unpushed"

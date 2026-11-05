@@ -253,3 +253,43 @@ def test_kind_detection(tmp_path):
 
     w = get_workbench(folder, tmp_path / "loc" / "Song", author=BOB)
     assert folder_kind(w.project_root) == "workbench"
+
+
+# --- presence --------------------------------------------------------------
+
+def test_unpushed_changes_are_visible_to_others_until_put_back(master, alice_wb, bob_wb):
+    edit(bob_wb, data=b"bob riff")
+    assert bob_wb.refresh_presence(live_here=False) == "unpushed"
+    seen = alice_wb.other_sessions()
+    assert [s["state"] for s in seen] == ["unpushed"]
+    from sessionsync.core.session import describe_sessions
+    assert "not put back" in describe_sessions(seen)
+
+    bob_wb.push()
+    assert alice_wb.other_sessions() == []
+
+
+def test_working_flag_then_nothing_when_idle(master, alice_wb, bob_wb):
+    assert bob_wb.refresh_presence(live_here=True) == "working"
+    assert alice_wb.other_sessions()[0]["state"] == "working"
+    assert bob_wb.refresh_presence(live_here=False) is None
+    assert alice_wb.other_sessions() == []
+
+
+def test_unpushed_does_not_fade_with_silence(master, alice_wb, bob_wb):
+    edit(bob_wb, data=b"x")
+    bob_wb.refresh_presence(live_here=False)
+    key = bob_wb.state.session["key"]
+    record = master.list_sessions()[0]
+    record["last_heartbeat"] = "2020-01-01T00:00:00+00:00"
+    record["unpushed_since"] = "2020-01-01T00:00:00+00:00"
+    master.write_session(key, record)
+    # an hour-old silent "working" fades; a week-old unpushed does not (this one is years old: it does)
+    from datetime import datetime, timedelta, timezone
+    recent = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat(timespec="seconds")
+    record["last_heartbeat"] = recent
+    master.write_session(key, record)
+    assert len(alice_wb.other_sessions()) == 1
+    record["state"] = "working"
+    master.write_session(key, record)
+    assert alice_wb.other_sessions() == []

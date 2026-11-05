@@ -1,9 +1,11 @@
 """A hub: one shared folder per collaborator, holding many songs.
 
-Each song is a subfolder that contains a SessionSync repository (it has a
-`repo.json`). Anything else in the hub - bounces, stems, documents - is not
-SessionSync's business and is ignored. A hub is just a folder, so it works with
-whatever keeps that folder in step between computers (Google Drive for desktop).
+Each song is a subfolder holding an Ableton project - the shared copy. A song
+SessionSync already looks after has a hidden `.sessionsync/` inside it; a plain
+Ableton project dropped in is listed as "ready to add". Anything else in the hub
+(bounces, stems, documents) is not SessionSync's business and is ignored. A hub is
+just a folder, so it works with whatever keeps it in step between computers
+(Google Drive for desktop).
 
 Scanning never writes: on a synced folder, even creating an empty directory
 would be uploaded and show up on everyone else's Mac.
@@ -11,30 +13,28 @@ would be uploaded and show up on everyone else's Mac.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from sessionsync.adapters import get_adapter
-from sessionsync.core.errors import NotAProjectError
+from sessionsync.adapters.ableton.adapter import AbletonAdapter
+from sessionsync.core import master
 from sessionsync.core.repository import Repository
 from sessionsync.core.summary import describe_version
 from sessionsync.core.manifest import Manifest
-from sessionsync.storage.local_folder import LocalFolderStorage
-
-REPO_FILE = "repo.json"
-_MANIFEST_RE = re.compile(r"^v(\d{6})\.json$")
+from sessionsync.storage.master_folder import MasterFolderStorage
 
 
 @dataclass
 class HubSong:
     name: str
     path: Path
+    kind: str = "shared"  # "shared" (looked after) | "ready" (plain project, not added yet)
     latest_version: int = 0
     latest_author: str = ""
     latest_time: str | None = None
     latest_summary: str = ""
     latest_note: str | None = None
+    people: list = field(default_factory=list)  # presence notes left by collaborators
 
 
 @dataclass
@@ -48,20 +48,6 @@ class HubEvent:
     authors: list[str] = field(default_factory=list)
 
 
-def _latest_manifest(manifests_dir: Path) -> tuple[int, Manifest | None]:
-    versions = sorted(
-        int(m.group(1))
-        for p in manifests_dir.iterdir()
-        if (m := _MANIFEST_RE.match(p.name))
-    ) if manifests_dir.is_dir() else []
-    if not versions:
-        return 0, None
-    try:
-        return versions[-1], Manifest.from_json((manifests_dir / f"v{versions[-1]:06d}.json").read_bytes())
-    except (OSError, ValueError, KeyError):
-        return versions[-1], None  # half-synced by Drive; the next scan will see it whole
-
-
 class Hub:
     def __init__(self, path: Path, name: str | None = None):
         self.path = Path(path)
@@ -72,20 +58,34 @@ class Hub:
     def songs(self) -> list[HubSong]:
         if not self.path.is_dir():
             return []
+        adapter = AbletonAdapter()
         found = []
         for folder in sorted(self.path.iterdir(), key=lambda p: p.name.lower()):
-            if folder.name.startswith(".") or not (folder / REPO_FILE).is_file():
+            if folder.name.startswith(".") or not folder.is_dir():
                 continue
-            version, manifest = _latest_manifest(folder / "manifests")
-            song = HubSong(name=folder.name, path=folder, latest_version=version)
-            if manifest is not None:
+            if MasterFolderStorage.looks_like_master(folder):
+                found.append(self._shared_song(folder))
+            elif adapter.detect_project(folder):
+                found.append(HubSong(name=folder.name, path=folder, kind="ready"))
+        return found
+
+    @staticmethod
+    def _shared_song(folder: Path) -> HubSong:
+        storage = MasterFolderStorage(folder)
+        versions = storage.list_versions()
+        song = HubSong(name=folder.name, path=folder, latest_version=versions[-1] if versions else 0)
+        try:
+            song.people = storage.list_sessions()
+            if versions:
+                manifest = Manifest.from_json(storage.read_manifest(versions[-1]))
                 author = manifest.author or {}
                 song.latest_author = author.get("name") or author.get("email") or ""
                 song.latest_time = manifest.created_at
                 song.latest_note = manifest.note
                 song.latest_summary = describe_version(None, manifest) if manifest.summary else ""
-            found.append(song)
-        return found
+        except (OSError, ValueError, KeyError):
+            pass  # half-synced by Drive; the next scan will see it whole
+        return song
 
     def song(self, name: str) -> HubSong | None:
         return next((s for s in self.songs() if s.name == name), None)
@@ -93,35 +93,31 @@ class Hub:
     def local_path(self, song_name: str, local_base: Path) -> Path:
         return Path(local_base) / self.name / song_name
 
-    def storage_for(self, song_name: str) -> LocalFolderStorage:
-        return LocalFolderStorage(self.path / song_name)
+    def storage_for(self, song_name: str) -> MasterFolderStorage:
+        return MasterFolderStorage(self.path / song_name)
 
     # --- acting ----------------------------------------------------------
 
     def add_song(self, song_name: str, project: Path, author: dict, *, note: str | None = None) -> Repository:
-        """Put an existing local Ableton project into this hub and push version 1."""
-        target = self.path / song_name
-        if target.exists():
-            raise FileExistsError(f"{self.name} already has a song called '{song_name}'.")
-        repo = Repository.create(
-            Path(project),
-            LocalFolderStorage(target),
-            adapter=get_adapter("ableton"),
-            author=author,
-            project_name=song_name,
-        )
-        repo.push(note=note or "First version")
-        return repo
+        """Copy a project that lives on this Mac into the hub; it becomes the working copy."""
+        return master.add_local_project(Path(project), self.path, author=author, name=song_name)
 
-    def join_song(self, song_name: str, local_base: Path, author: dict) -> Repository:
-        """Download a song from this hub onto this Mac."""
+    def join_song(self, song_name: str, local_base: Path, author: dict, destination: Path | None = None) -> Repository:
+        """Get your own working copy of a shared song.
+
+        A plain project sitting in the hub is set up first (only the hidden
+        `.sessionsync` folder is written there; the project files are untouched).
+        """
         song = self.song(song_name)
         if song is None:
+            from sessionsync.core.errors import NotAProjectError
+
             raise NotAProjectError(f"{self.name} has no song called '{song_name}'.")
-        destination = self.local_path(song_name, local_base)
-        if destination.exists() and any(destination.iterdir()):
-            raise FileExistsError(f"{destination} already has files in it.")
-        return Repository.clone(self.storage_for(song_name), destination, author=author)
+        if song.kind == "ready":
+            master.adopt(song.path, author=author)
+        return master.get_workbench(
+            song.path, destination or self.local_path(song_name, local_base), author=author
+        )
 
 
 def compare_scans(
