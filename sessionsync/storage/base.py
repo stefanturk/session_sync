@@ -18,6 +18,10 @@ class StorageError(Exception):
     """Something went wrong talking to the storage backend."""
 
 
+class NotReadyError(StorageError):
+    """The shared copy is not fully there yet (Google Drive is still syncing)."""
+
+
 class VersionAlreadyExistsError(StorageError):
     """Someone else published this version first."""
 

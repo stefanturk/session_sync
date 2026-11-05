@@ -33,7 +33,7 @@ from sessionsync.core.manifest import (
     build_file_map,
     diff_file_maps,
 )
-from sessionsync.storage.base import StorageProvider, VersionAlreadyExistsError
+from sessionsync.storage.base import NotReadyError, StorageProvider, VersionAlreadyExistsError
 
 REPOSITORY_FORMAT_VERSION = 1
 
@@ -433,6 +433,17 @@ class Repository:
             at_risk = self.changes_a_pull_would_replace(target)
             if at_risk:
                 raise LocalChangesWouldBeReplacedError(at_risk)
+
+        # A shared copy that is still arriving (Google Drive) must not be half-copied.
+        waiting = getattr(self.storage, "not_ready", None)
+        if waiting is not None:
+            unready = waiting(target.files)
+            if unready:
+                shown = ", ".join(unready[:2]) + (" and more" if len(unready) > 2 else "")
+                raise NotReadyError(
+                    f"Google Drive is still syncing {len(unready)} file(s) ({shown}). "
+                    "Try again in a minute."
+                )
 
         trash = self._new_trash_folder()
         downloaded = 0
