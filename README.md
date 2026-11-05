@@ -114,3 +114,18 @@ Or open the window on the same project:
 The interesting ones are `test_crash_safety.py` (kills a push at every stage and
 asserts the current version never names a missing file) and `test_pull_safety.py`
 (a pull never silently replaces work that only exists on your Mac).
+
+
+## Shared copy and your own copy (Get it / Put back)
+
+The shared copy in a Drive folder is an ordinary Ableton project, plus a hidden `.sessionsync/` folder.
+Nobody works in it. Each person **gets** their own working copy anywhere on their Mac, works there, and
+**puts it back** when done:
+
+- Put back only works if you started from the newest version; otherwise **Catch Up** saves your whole
+  version aside first, brings theirs, and lists who changed which tracks.
+- The shared copy changes only when a put-back succeeds. A crash part way is finished or undone by the next client.
+- Only the last 5 versions are kept (as changed-file history), plus any you `pin`.
+- Others see "working now" (from the app, and Live's own log) and "has changes not put back" until they do.
+- If Google Drive is still syncing, getting the latest stops with a message instead of half-copying.
+- Not built yet: automatically combining two edited sets (Catch Up keeps both sets side by side instead).
