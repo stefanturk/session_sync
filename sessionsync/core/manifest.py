@@ -50,6 +50,10 @@ class Manifest:
     created_at: str | None = None
     author: dict | None = None
     note: str | None = None
+    #: Optional extras written at push time. Older manifests lack them, and
+    #: readers that do not know them ignore them, so no format bump is needed.
+    summary: str | None = None
+    tracks: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         if self.created_at is None:
@@ -72,6 +76,8 @@ class Manifest:
             "created_at": self.created_at,
             "author": self.author,
             "note": self.note,
+            "summary": self.summary,
+            "tracks": self.tracks,
             "files": {path: self.files[path].to_dict() for path in sorted(self.files)},
         }
         return json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=False)
@@ -92,6 +98,8 @@ class Manifest:
             created_at=data.get("created_at"),
             author=data.get("author"),
             note=data.get("note"),
+            summary=data.get("summary"),
+            tracks=data.get("tracks"),
         )
 
 

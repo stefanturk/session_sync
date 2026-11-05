@@ -43,3 +43,15 @@ def alice(project, remote):
 def bob(tmp_path, remote, alice):
     """Bob's working copy, pulled fresh from the same remote."""
     return Repository.clone(remote, tmp_path / "bob" / "My Song", author=BOB)
+
+
+def als_with_tracks(tracks: dict[str, str]) -> bytes:
+    """A gzipped Live Set with the given {track name: marker content}."""
+    body = "".join(
+        f'<MidiTrack Id="{i}"><Name><EffectiveName Value="{name}"/></Name>'
+        f'<Notes Value="{marker}"/><TrackUnfolded Value="true"/></MidiTrack>'
+        for i, (name, marker) in enumerate(tracks.items())
+    )
+    return gzip.compress(
+        f"<Ableton MinorVersion='11.0_11300'><LiveSet><Tracks>{body}</Tracks></LiveSet></Ableton>".encode()
+    )

@@ -25,6 +25,7 @@ from sessionsync.core.errors import (
     StalePushError,
 )
 from sessionsync.core.hashing import HashCache
+from sessionsync.core.summary import describe_version, summarise
 from sessionsync.core.manifest import (
     FileEntry,
     Manifest,
@@ -83,6 +84,7 @@ class VersionSummary:
     modified: list[str]
     deleted: list[str]
     size_change: int
+    summary: str = ""
 
 
 class Repository:
@@ -264,6 +266,7 @@ class Repository:
         summaries = []
         previous: dict[str, FileEntry] = {}
         previous_bytes = 0
+        previous_manifest: Manifest | None = None
         for version in self.storage.list_versions():
             manifest = self.read_manifest(version)
             diff = diff_file_maps(previous, manifest.files)
@@ -277,10 +280,48 @@ class Repository:
                     modified=diff.modified,
                     deleted=diff.deleted,
                     size_change=manifest.total_bytes - previous_bytes,
+                    summary=describe_version(previous_manifest, manifest),
                 )
             )
             previous, previous_bytes = manifest.files, manifest.total_bytes
+            previous_manifest = manifest
         return list(reversed(summaries))
+
+    def versions_after(self, version: int) -> list[VersionSummary]:
+        """Versions newer than `version`, oldest first: "what happened while I was away"."""
+        newer = [h for h in self.history() if h.version > version]
+        return sorted(newer, key=lambda h: h.version)
+
+    def restore_copy(self, version: int, destination: Path) -> Path:
+        """Build an old version into a brand-new folder, leaving this project alone.
+
+        The point is going back when someone breaks a song: open the copy in Live,
+        compare, take what you want. Refuses a destination that already exists, so
+        it can never overwrite a project.
+        """
+        destination = Path(destination)
+        if destination.exists():
+            raise FileExistsError(f"{destination} already exists; choose a new folder.")
+        if version not in self.storage.list_versions():
+            raise ValueError(f"There is no version {version}.")
+        manifest = self.read_manifest(version)
+        destination.mkdir(parents=True)
+        try:
+            for path, entry in sorted(manifest.files.items()):
+                self.storage.download_object(entry.sha256, destination / path)
+        except BaseException:
+            shutil.rmtree(destination, ignore_errors=True)
+            raise
+        return destination
+
+    def _track_fingerprints(self) -> dict[str, str] | None:
+        fingerprint = getattr(self.adapter, "track_fingerprints", None)
+        if fingerprint is None:
+            return None
+        try:
+            return fingerprint(self.project_root)
+        except Exception:  # a summary must never be the reason a push fails
+            return None
 
     # --- sessions -------------------------------------------------------
 
@@ -341,6 +382,13 @@ class Repository:
             uploaded_bytes += entry.size
 
         new_version = remote_version + 1
+        previous_tracks = (
+            self.read_manifest(remote_version).tracks if remote_version else None
+        )
+        new_tracks = self._track_fingerprints()
+        summary = summarise(
+            diff, previous_tracks, new_tracks, first=remote_version == 0
+        )
         manifest = Manifest(
             version=new_version,
             repository_id=self.state.repository_id,
@@ -349,6 +397,8 @@ class Repository:
             author=self.author,
             note=note,
             files=files,
+            summary=summary,
+            tracks=new_tracks,
         )
         try:
             # Publishing the manifest is the commit point — one winner per version.

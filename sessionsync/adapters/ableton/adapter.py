@@ -9,7 +9,9 @@ Mac, and skip what Live or macOS regenerates by itself.
 from __future__ import annotations
 
 import gzip
+import hashlib
 import re
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -33,6 +35,15 @@ EXCLUDED_SUFFIXES = {
 }
 
 EXCLUDED_NAMES = {".DS_Store", "Icon\r", "Thumbs.db", "desktop.ini"}
+
+# Parts of a track that change when you merely look around (folding, selection),
+# not when you change the music. Dropped before fingerprinting a track.
+_VIEW_NOISE = {
+    "TrackUnfolded", "ViewData", "LastSelectedTimeableIndex",
+    "LastSelectedClipEnvelopeIndex", "SelectedEnvelope", "IsContentSelectedInDocument",
+    "ViewStates",
+}
+_TRACK_TAGS = {"AudioTrack", "MidiTrack", "GroupTrack", "ReturnTrack"}
 
 _MINOR_VERSION_RE = re.compile(rb"MinorVersion=\"([^\"]+)\"|MinorVersion='([^']+)'")
 _FILE_REF_RE = re.compile(rb"<FileRef>.*?</FileRef>", re.DOTALL)
@@ -221,6 +232,41 @@ class AbletonAdapter:
         path = Path(path)
         tracked = [p for p in path.rglob("*") if p.is_file() and self._is_tracked(p, path)]
         return sorted(tracked)
+
+    def track_fingerprints(self, path: Path) -> dict[str, str] | None:
+        """{track name: hash of that track's content} for the main Live Set.
+
+        Lets a version be described as "changed Drums" instead of "changed a
+        file". None when the set cannot be read, so callers fall back to files.
+        """
+        info = self.inspect_project(path)
+        if info.primary_set is None:
+            return None
+        try:
+            with gzip.open(info.primary_set, "rb") as fh:
+                root = ET.fromstring(fh.read())
+        except (OSError, EOFError, ET.ParseError):
+            return None
+        tracks_el = root.find("./LiveSet/Tracks")
+        if tracks_el is None:
+            return None
+        found: dict[str, str] = {}
+        for track in tracks_el:
+            if track.tag not in _TRACK_TAGS:
+                continue
+            name_el = track.find("./Name/EffectiveName")
+            name = (name_el.get("Value") if name_el is not None else "") or track.tag
+            for noisy in list(track.iter()):
+                noisy.attrib.pop("Id", None)  # Live renumbers these on every save
+                for child in list(noisy):
+                    if child.tag in _VIEW_NOISE:
+                        noisy.remove(child)
+            digest = hashlib.sha1(ET.tostring(track)).hexdigest()[:12]
+            unique, n = name, 2
+            while unique in found:  # two tracks can share a name
+                unique, n = f"{name} {n}", n + 1
+            found[unique] = digest
+        return found
 
     def environment_requirements(self, path: Path) -> dict:
         info = self.inspect_project(path)
