@@ -15,12 +15,34 @@ before you start playing — not after two hours of takes.
 | Folder-backed storage (a folder, external drive, NAS) | done |
 | CLI (`sessionsync`) | done |
 | PySide6 Mac app, packaged as a `.app` | done |
-| Test suite, incl. crash and stale-push tests | 260 passing |
+| Shared folders ("hubs"), version summaries, restore a copy, clickable banners | done |
+| Test suite, incl. crash and stale-push tests | 298 passing |
 | Google Drive backend | next |
 
 Proven on a real 415 MB Live 11 project: byte-for-byte reconstruction of 103
 files, `Backup/` and `.asd` correctly ignored, and dedup taking a 34 MB "added"
 set down to 95 KB actually uploaded.
+
+## Working with collaborators
+
+Connect a shared folder once (for example a Google Drive folder that Drive for
+desktop keeps on your Mac) and every Ableton song inside it appears, including
+songs added later. Anything else in the folder is ignored.
+
+```bash
+sessionsync hub add "~/My Drive/Song Collaboration/Sam Stefan Sketches" --name Sam
+sessionsync song new Sam "~/Music/Ableton/My Song"   # share a project you have
+sessionsync song join Sam "Song B"                   # download one of theirs
+sessionsync hub news                                 # what changed since you looked
+sessionsync history                                  # each version, in plain words
+sessionsync restore 7 --to "~/Desktop/My Song v7"    # an old version, in a new folder
+```
+
+Versions are described automatically, e.g. "Added Sax · Changed Drums · 3 new
+samples". Restoring never touches your project: it builds the old version in a
+folder of its own so you can open it in Live and take what you want. In the app,
+songs are checked every minute; a closed song with nothing unpushed is pulled by
+itself, and a banner says what happened. Clicking the banner opens that song.
 
 ## The app
 

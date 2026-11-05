@@ -42,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
 
     window = MainWindow(Settings())
     window.show()
+    window.start_hub_watch()
 
     # The start screen is the front door; a path on the command line skips it.
     project = project_argument(argv)

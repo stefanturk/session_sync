@@ -125,12 +125,13 @@ class Hub:
 
 
 def compare_scans(
-    hub: Hub, previous: dict[str, int] | None
+    hub: Hub, previous: dict[str, int] | None, me: dict | None = None
 ) -> tuple[list[HubEvent], dict[str, int]]:
     """Events since `previous` ({song: latest version seen}) and the new seen map.
 
     `previous` of None means this hub was just connected: everything already
-    there is the starting point, not news.
+    there is the starting point, not news. Versions pushed by `me` (matched by
+    email) are not news either, though they still advance the seen map.
     """
     songs = hub.songs()
     current = {s.name: s.latest_version for s in songs}
@@ -145,22 +146,24 @@ def compare_scans(
         elif song.latest_version > before:
             storage = hub.storage_for(song.name)
             versions, summaries, authors = [], [], []
+            reached = before
             prior = Manifest.from_json(storage.read_manifest(before)) if before else None
             for v in range(before + 1, song.latest_version + 1):
                 try:
                     manifest = Manifest.from_json(storage.read_manifest(v))
                 except (OSError, ValueError, KeyError):
                     break  # a version still arriving from Drive; catch it next time
-                versions.append(v)
-                summaries.append(describe_version(prior, manifest))
                 who = manifest.author or {}
-                authors.append(who.get("name") or who.get("email") or "Someone")
+                reached = v
+                mine = bool(me and who.get("email") and who.get("email") == me.get("email"))
+                if not mine:
+                    versions.append(v)
+                    summaries.append(describe_version(prior, manifest))
+                    authors.append(who.get("name") or who.get("email") or "Someone")
                 prior = manifest
+            current[song.name] = reached
             if versions:
                 events.append(HubEvent("new_versions", song.name, versions, summaries, authors))
-                current[song.name] = versions[-1]
-            else:
-                current[song.name] = before
     return events, current
 
 

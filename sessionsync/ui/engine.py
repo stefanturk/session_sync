@@ -125,6 +125,14 @@ class Engine(QObject):
     def history(self) -> None:
         self._run("history", "Reading history…", lambda: self._repository().history())
 
+    @Slot(int, str)
+    def restore(self, version: int, destination: str) -> None:
+        self._run(
+            "restore",
+            f"Rebuilding v{version}…",
+            lambda: self._repository().restore_copy(version, Path(destination)),
+        )
+
     # --- internals -------------------------------------------------------
 
     def _run(self, name: str, busy: str, work) -> None:

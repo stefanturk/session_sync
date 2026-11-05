@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QHeaderView,
+    QFileDialog,
     QInputDialog,
     QLabel,
     QMessageBox,
@@ -81,6 +82,7 @@ class ProjectPane(QWidget):
     request_pull = Signal(bool)
     request_review = Signal()
     request_history = Signal()
+    request_restore = Signal(int, str)
 
     #: level, state_label — so the shell can colour the tab and title the window
     state_changed = Signal(str, str)
@@ -89,6 +91,8 @@ class ProjectPane(QWidget):
         super().__init__(parent)
         self.project_root = Path(project_root)
         self.previous_status = None
+        #: set by the window so banners are clickable; None = plain banner
+        self.notifier = None
         self.snapshot: Snapshot | None = None
         self._checking_now = False
 
@@ -282,6 +286,7 @@ class ProjectPane(QWidget):
         self.request_pull.connect(self.engine.pull)
         self.request_review.connect(self.engine.review)
         self.request_history.connect(self.engine.history)
+        self.request_restore.connect(self.engine.restore)
 
         self.engine.snapshot_ready.connect(self._show)
         self.engine.operation_done.connect(self._operation_done)
@@ -369,7 +374,10 @@ class ProjectPane(QWidget):
         self.last_push_label.setText(model.last_push)
 
         for message in notifications(self.previous_status, snapshot.status):
-            notify(message, title=snapshot.project_name)
+            if self.notifier is not None:
+                self.notifier.show(message, title=snapshot.project_name, target=self.project_root)
+            else:
+                notify(message, title=snapshot.project_name)
             self._say(message, 15000)
         self.previous_status = snapshot.status
 
@@ -469,6 +477,9 @@ class ProjectPane(QWidget):
             self._show_review(result)
         elif name == "history":
             self._show_history(result)
+        elif name == "restore":
+            self._say(f"Restored a copy to {result}.", 15000)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.parent)))
 
     def _operation_failed(self, name: str, error: Exception) -> None:
         if isinstance(error, LocalChangesWouldBeReplacedError):
@@ -536,13 +547,27 @@ class ProjectPane(QWidget):
             who = (entry.author or {}).get("name", "Someone")
             lines.append(
                 f"v{entry.version}   {local_time(entry.created_at)}   {who} — "
-                f"{entry.note or '(no note)'}"
+                f"{entry.summary or '(no summary)'}"
             )
-            lines.append(
-                f"        {len(entry.added)} added, {len(entry.modified)} changed, "
-                f"{len(entry.deleted)} removed"
-            )
-        show_text(self, "Project History", "\n".join(lines) or "No versions yet.")
+            if entry.note:
+                lines.append(f"        \u201c{entry.note}\u201d")
+        chosen = show_history(self, "\n".join(lines) or "No versions yet.", entries)
+        if chosen is not None:
+            self.restore_version(chosen)
+
+    def restore_version(self, version: int) -> None:
+        """Rebuild an old version in a new folder beside the project."""
+        parent = QFileDialog.getExistingDirectory(
+            self, f"Where should the copy of v{version} go?", str(self.project_root.parent)
+        )
+        if not parent:
+            return
+        destination = Path(parent) / f"{self.project_name} (v{version})"
+        n = 2
+        while destination.exists():
+            destination = Path(parent) / f"{self.project_name} (v{version}) {n}"
+            n += 1
+        self.request_restore.emit(version, str(destination))
 
     # --- shutdown --------------------------------------------------------
 
@@ -588,3 +613,40 @@ def show_text(parent, title: str, text: str) -> None:
     buttons.rejected.connect(dialog.reject)
     layout.addWidget(buttons)
     dialog.exec()
+
+
+def show_history(parent, text: str, entries) -> int | None:
+    """The history text plus a way to bring a version back as a separate copy.
+
+    Returns the version chosen for restoring, or None.
+    """
+    dialog = QDialog(parent)
+    dialog.setWindowTitle("Project History")
+    dialog.resize(680, 480)
+    layout = QVBoxLayout(dialog)
+    view = QTextEdit()
+    view.setReadOnly(True)
+    view.setPlainText(text)
+    view.setStyleSheet("font-family: 'SF Mono', Menlo, monospace; font-size: 12px;")
+    layout.addWidget(view)
+
+    buttons = QDialogButtonBox(QDialogButtonBox.Close)
+    restore = buttons.addButton("Restore a Copy\u2026", QDialogButtonBox.ActionRole)
+    buttons.rejected.connect(dialog.reject)
+    layout.addWidget(buttons)
+
+    picked: list[int] = []
+
+    def ask() -> None:
+        labels = [f"v{e.version} \u2014 {e.summary or 'no summary'}" for e in entries]
+        label, ok = QInputDialog.getItem(
+            dialog, "Restore a Copy", "Which version?", labels, 0, False
+        )
+        if ok:
+            picked.append(entries[labels.index(label)].version)
+            dialog.accept()
+
+    restore.clicked.connect(ask)
+    restore.setEnabled(bool(entries))
+    dialog.exec()
+    return picked[0] if picked else None

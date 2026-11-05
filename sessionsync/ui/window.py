@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QMainWindow,
     QMessageBox,
@@ -21,8 +22,10 @@ from PySide6.QtWidgets import (
     QTabWidget,
 )
 
+from sessionsync.auth.identity import load_identity
 from sessionsync.core.localstate import LocalState
-from sessionsync.ui import theme
+from sessionsync.ui import hubsync, theme
+from sessionsync.ui.notify import Notifier
 from sessionsync.ui.pane import ProjectPane
 from sessionsync.ui.presenter import close_warning
 from sessionsync.ui.settings import Settings
@@ -30,6 +33,25 @@ from sessionsync.ui.start import StartScreen
 from sessionsync.ui.widgets import dot_icon
 
 APP_NAME = "SessionSync"
+
+#: How often shared folders are checked for new songs and versions.
+HUB_CHECK_MS = 60_000
+
+
+class _HubCheck(QThread):
+    """One pass over the shared folders, off the UI thread (it may download)."""
+
+    done = Signal(list)
+
+    def __init__(self, settings, author, open_roots, parent: QObject | None = None):
+        super().__init__(parent)
+        self.settings, self.author, self.open_roots = settings, author, open_roots
+
+    def run(self) -> None:
+        try:
+            self.done.emit(hubsync.check_hubs(self.settings, self.author, self.open_roots))
+        except Exception:  # noqa: BLE001 - the next pass tries again
+            self.done.emit([])
 
 
 class MainWindow(QMainWindow):
@@ -41,6 +63,9 @@ class MainWindow(QMainWindow):
         self.resize(880, 660)
         self.setMinimumSize(700, 540)
         self.setStyleSheet(theme.STYLESHEET)
+        self.notifier = Notifier(on_click=self.show_news_target)
+        self._hub_check: _HubCheck | None = None
+        self._hub_timer: QTimer | None = None
         self._build()
 
     # --- construction ----------------------------------------------------
@@ -56,6 +81,9 @@ class MainWindow(QMainWindow):
         self.start = StartScreen(self.settings)
         self.start.open_requested.connect(self.choose_project)
         self.start.project_chosen.connect(self.open_project)
+        self.start.connect_requested.connect(self.connect_folder)
+        self.start.song_chosen.connect(self.open_song)
+        self.start.share_requested.connect(self.share_project)
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self.start)
@@ -128,6 +156,7 @@ class MainWindow(QMainWindow):
             return None
 
         pane = ProjectPane(project_root)
+        pane.notifier = self.notifier
         pane.state_changed.connect(lambda level, label, p=pane: self._tab_state(p, level, label))
         index = self.tabs.addTab(pane, pane.project_name)
         self.tabs.setTabIcon(index, dot_icon(theme.EDGE_LIT))
@@ -138,6 +167,86 @@ class MainWindow(QMainWindow):
         self.start.refresh()
         self._show_start_if_empty()
         return pane
+
+    # --- shared folders --------------------------------------------------
+
+    def connect_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, "Choose the shared folder (e.g. in Google Drive)"
+        )
+        if folder:
+            self.settings.add_hub(Path(folder))
+            self.start.refresh()
+
+    def open_song(self, hub, song: str) -> None:
+        """Open a song from a shared folder, downloading it first if it is new here."""
+        local = self.settings.song_path(hub, song)
+        if not (local.is_dir() and LocalState.exists(local)):
+            try:
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+                local = hubsync.join(hub, song, self.settings, load_identity())
+            except Exception as exc:  # noqa: BLE001 - shown, not raised
+                QMessageBox.warning(self, "Could not download that song", str(exc))
+                return
+            finally:
+                QApplication.restoreOverrideCursor()
+        self.open_project(local)
+
+    def share_project(self, hub) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, f"Choose the Ableton project to share with {hub.name}"
+        )
+        if not folder:
+            return
+        try:
+            path = hubsync.share(hub, Path(folder), self.settings, load_identity())
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Could not share that project", str(exc))
+            return
+        self.start.refresh()
+        self.open_project(path)
+
+    def start_hub_watch(self) -> None:
+        """Check the shared folders now and then every minute."""
+        if self._hub_timer is None:
+            self._hub_timer = QTimer(self)
+            self._hub_timer.timeout.connect(self.check_hubs_now)
+        self._hub_timer.start(HUB_CHECK_MS)
+        QTimer.singleShot(2000, self.check_hubs_now)
+
+    def check_hubs_now(self) -> None:
+        if self._hub_check is not None and self._hub_check.isRunning():
+            return
+        if not self.settings.hubs():
+            return
+        try:
+            author = load_identity()
+        except Exception:  # noqa: BLE001
+            return
+        open_roots = {p.project_root for p in self.panes()}
+        self._hub_check = _HubCheck(self.settings, author, open_roots, self)
+        self._hub_check.done.connect(self._hub_news)
+        self._hub_check.start()
+
+    def _hub_news(self, news: list) -> None:
+        for item in news:
+            self.notifier.show(item.text, title=item.hub.name, target=(item.hub, item.song, item.path))
+        if news:
+            self.start.refresh()
+
+    def show_news_target(self, target) -> None:
+        """A banner was clicked: go to the song it was about."""
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        if isinstance(target, Path):
+            self.open_project(target)
+        elif isinstance(target, tuple):
+            hub, song, path = target
+            if path is not None and LocalState.exists(path):
+                self.open_project(path)
+            else:
+                self.stack.setCurrentWidget(self.start)
 
     def choose_project(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Choose a SessionSync project")

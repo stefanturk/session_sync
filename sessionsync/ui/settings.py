@@ -72,6 +72,17 @@ class Settings:
     def set_local_root(self, path: Path) -> None:
         self._write({**self._read(), "local_root": str(path)})
 
+    def song_path(self, hub: Hub, song: str) -> Path:
+        """Where this song lives on this Mac: recorded when joined or shared,
+        otherwise the standard place under the local root."""
+        recorded = self._read().get("song_paths", {}).get(f"{hub.path}|{song}")
+        return Path(recorded) if recorded else hub.local_path(song, self.local_root())
+
+    def set_song_path(self, hub: Hub, song: str, path: Path) -> None:
+        data = self._read()
+        data.setdefault("song_paths", {})[f"{hub.path}|{song}"] = str(path)
+        self._write(data)
+
     def seen(self, hub: Hub) -> dict[str, int] | None:
         """{song: newest version already reported}, or None for a hub never scanned."""
         value = self._read().get("seen", {}).get(str(hub.path))

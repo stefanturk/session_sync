@@ -49,12 +49,18 @@ One per version, immutable once published:
   "created_at": "…",
   "author": {"name": "Bob", "email": "bob@example.com"},
   "note": "Guitar overdubs",
+  "summary": "Added Sax · Changed Drums",
+  "tracks": {"Drums": "9f2c01ab33de", "Sax": "5be1c0a47710"},
   "files": {
     "My Song.als": {"sha256": "…", "size": 97407},
     "Samples/Recorded/Sax 0051.aif": {"sha256": "…", "size": 20066304}
   }
 }
 ```
+
+`summary` and `tracks` are optional: a one-line description and a per-track
+content fingerprint written at push time (older manifests lack them, and readers
+ignore fields they do not know).
 
 A manifest lists the *complete* project, not a delta — so any version can be
 reconstructed on its own, and identical audio across versions is stored once.

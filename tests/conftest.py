@@ -59,6 +59,7 @@ def als_with_tracks(tracks: dict[str, str]) -> bytes:
 
 @pytest.fixture(autouse=True)
 def no_real_notifications(monkeypatch):
+    monkeypatch.setenv("SESSIONSYNC_NO_NOTIFY", "1")  # tray banners too
     """Tests must never pop real macOS banners ("My Song: Bob finished working").
 
     Everything that notifies goes through subprocess.run in ui.notify, so stub

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
+    QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from sessionsync.ui import hubsync
 from sessionsync.ui.settings import Settings
 
 ROW_HEIGHT = 48
@@ -27,6 +29,9 @@ ROW_HEIGHT = 48
 class StartScreen(QWidget):
     project_chosen = Signal(object)  # Path
     open_requested = Signal()
+    connect_requested = Signal()
+    song_chosen = Signal(object, str)  # Hub, song name
+    share_requested = Signal(object)  # Hub
 
     def __init__(self, settings: Settings, parent: QWidget | None = None):
         super().__init__(parent)
@@ -49,6 +54,23 @@ class StartScreen(QWidget):
         tagline.setAlignment(Qt.AlignCenter)
         column.addWidget(tagline)
         column.addSpacing(26)
+
+        self.collab_label = QLabel("COLLABORATORS")
+        self.collab_label.setObjectName("silkscreen")
+        column.addWidget(self.collab_label)
+
+        self.collab = QListWidget()
+        self.collab.setObjectName("recentList")
+        self.collab.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.collab.itemActivated.connect(self._song_activated)
+        self.collab.itemClicked.connect(self._song_activated)
+        column.addWidget(self.collab)
+
+        self.connect_button = QPushButton("CONNECT A SHARED FOLDER…")
+        self.connect_button.setCursor(Qt.PointingHandCursor)
+        self.connect_button.clicked.connect(self.connect_requested.emit)
+        column.addWidget(self.connect_button)
+        column.addSpacing(14)
 
         self.recent_label = QLabel("RECENT PROJECTS")
         self.recent_label.setObjectName("silkscreen")
@@ -84,6 +106,8 @@ class StartScreen(QWidget):
             self.recent.addItem(item)
             self.recent.setItemWidget(item, _RecentRow(project))
 
+        self._refresh_collaborators()
+
         empty = not projects
         self.recent.setVisible(not empty)
         self.recent_label.setVisible(not empty)
@@ -91,8 +115,89 @@ class StartScreen(QWidget):
             # Hug the content rather than leaving a tall empty box.
             self.recent.setFixedHeight(min(len(projects), 5) * ROW_HEIGHT + 14)
 
+    def _refresh_collaborators(self) -> None:
+        """One block per shared folder, a row per song inside it."""
+        self.collab.clear()
+        rows = 0
+        for hub in self.settings.hubs():
+            header = QListWidgetItem()
+            header.setFlags(Qt.NoItemFlags)
+            header.setSizeHint(QSize(0, 48))
+            self.collab.addItem(header)
+            self.collab.setItemWidget(header, _HubHeader(hub, self.share_requested.emit))
+            rows += 1
+            songs = hubsync.song_rows(hub, self.settings)
+            for row in songs:
+                item = QListWidgetItem()
+                item.setData(Qt.UserRole, (hub, row.song.name))
+                item.setSizeHint(QSize(0, ROW_HEIGHT))
+                self.collab.addItem(item)
+                self.collab.setItemWidget(item, _SongRow(row))
+                rows += 1
+            if not songs:
+                note = QListWidgetItem()
+                note.setFlags(Qt.NoItemFlags)
+                note.setSizeHint(QSize(0, 30))
+                self.collab.addItem(note)
+                label = QLabel("  No songs shared here yet.")
+                label.setObjectName("recentPath")
+                self.collab.setItemWidget(note, label)
+                rows += 1
+        self.collab.setVisible(rows > 0)
+        if rows:
+            self.collab.setFixedHeight(min(rows, 8) * ROW_HEIGHT + 14)
+
+    def _song_activated(self, item: QListWidgetItem) -> None:
+        data = item.data(Qt.UserRole)
+        if data:
+            hub, song = data
+            self.song_chosen.emit(hub, song)
+
     def _chosen(self, item: QListWidgetItem) -> None:
         self.project_chosen.emit(Path(item.data(Qt.UserRole)))
+
+
+class _HubHeader(QWidget):
+    def __init__(self, hub, on_share):
+        super().__init__()
+        self.setFixedHeight(48)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(4, 4, 4, 4)
+        name = QLabel(hub.name)
+        name.setObjectName("recentName")
+        row.addWidget(name, 1)
+        share = QPushButton("Share a project…")
+        share.setCursor(Qt.PointingHandCursor)
+        share.setFixedHeight(34)
+        share.setStyleSheet("padding: 2px 14px; font-size: 11px;")
+        share.setMinimumWidth(150)
+        share.clicked.connect(lambda: on_share(hub))
+        row.addWidget(share)
+
+
+class _SongRow(QWidget):
+    """Song name, who did what last, and whether this Mac is behind."""
+
+    def __init__(self, row: "hubsync.SongRow"):
+        super().__init__()
+        self.setFixedHeight(ROW_HEIGHT)
+        column = QVBoxLayout(self)
+        column.setContentsMargins(14, 5, 4, 5)
+        column.setSpacing(1)
+
+        top = QHBoxLayout()
+        name = QLabel(row.song.name)
+        name.setObjectName("recentName")
+        top.addWidget(name, 1)
+        state = QLabel(row.label)
+        state.setObjectName("recentPath")
+        top.addWidget(state)
+        column.addLayout(top)
+
+        detail = QLabel(_elide(row.detail or "No summary", 80))
+        detail.setObjectName("recentPath")
+        detail.setTextFormat(Qt.PlainText)
+        column.addWidget(detail)
 
 
 class _RecentRow(QWidget):
