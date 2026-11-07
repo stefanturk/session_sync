@@ -220,3 +220,14 @@ def test_the_push_preview_blocks_an_unreadable_set(qt_app, identity, alice):
     _, problems = push_preview(shots[-1])
 
     assert problems and "could not be read" in problems[0]
+
+
+def test_a_failed_background_check_never_pops_up_a_dialog(pane, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    shown = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: shown.append(self.text()))
+    for _ in range(3):
+        pane._operation_failed("refresh", PermissionError(13, "Permission denied", "Vocal.wav"))
+    assert shown == []
+    assert "Permission denied" in pane.status_line.text()

@@ -66,6 +66,27 @@ class HashCache:
             return row[3]
 
         digest = hash_file(path)
+        self._store(key, identity, digest)
+        return digest
+
+    def remember(self, path: Path, sha256: str) -> None:
+        """Record a hash already known (a file just copied and verified), so it is never read again."""
+        path = Path(path)
+        stat = path.stat()
+        self._store(str(path), (stat.st_size, stat.st_mtime_ns, stat.st_ino), sha256)
+
+    def last_known(self, path: Path) -> str | None:
+        """The hash recorded for `path` if its size has not changed since. None otherwise."""
+        path = Path(path)
+        with self._connect() as conn:
+            row = conn.execute("SELECT size, sha256 FROM hash_cache WHERE path = ?", (str(path),)).fetchone()
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return None
+        return row[1] if row is not None and row[0] == size else None
+
+    def _store(self, key: str, identity: tuple, digest: str) -> None:
         with self._connect() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO hash_cache (path, size, mtime_ns, inode, sha256)"
@@ -73,7 +94,6 @@ class HashCache:
                 (key, *identity, digest),
             )
             conn.commit()
-        return digest
 
     def close(self) -> None:
         """Nothing is held open."""

@@ -92,3 +92,14 @@ class SharedHistoryMissingError(SessionSyncError):
             "Google Drive's Trash or at the top of My Drive for a .sessionsync folder, "
             "or share your copy again as a new song."
         )
+
+
+class FileInUseError(SessionSyncError):
+    """Another program (Live, on Windows) holds a file open so it cannot be read."""
+
+    def __init__(self, path):
+        self.path = path
+        super().__init__(
+            f"Live (or another program) is using {path.name}, so Session Sync cannot read it "
+            "right now. Close the song in Live, then try again. Nothing was changed."
+        )

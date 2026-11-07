@@ -12,6 +12,8 @@ around it knows nothing about repositories.
 
 from __future__ import annotations
 
+from sessionsync.core import osinfo
+
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -737,6 +739,12 @@ class ProjectPane(QWidget):
         )
 
     def _operation_failed(self, name: str, error: Exception) -> None:
+        if name == "refresh":
+            # A background look runs every few seconds: a dialog each time would
+            # never stop. Say it in the window, once, and keep looking.
+            osinfo.log(f"refresh failed for {self.project_root}: {error!r}")
+            self._say(f"Could not check this song just now: {error}")
+            return
         self._open_after_pull = False
         if isinstance(error, LocalChangesWouldBeReplacedError):
             self._confirm_replacing_local_work(error)

@@ -120,6 +120,8 @@ class Repository:
         self.hash_cache = HashCache(state.db_path)
         self._known_cache: tuple[int, dict[str, str]] | None = None
         self.last_plan = None
+        self._looking = False  # a status check (may skip files Live holds open), not a push
+        self.in_use: list[str] = []  # files the last look could not read
 
     # --- setting up ----------------------------------------------------
 
@@ -253,7 +255,7 @@ class Repository:
         plan = plan_push(
             self.project_root,
             known=self._known_paths(),
-            hash_file=self.hash_cache.hash_file,
+            hash_file=self._hash,
             rewrite=rewrite,
         )
         self.last_plan = plan
@@ -261,9 +263,41 @@ class Repository:
 
     def _file_map(self, sources: dict[str, Path]) -> dict[str, FileEntry]:
         return {
-            rel: FileEntry(path=rel, sha256=self.hash_cache.hash_file(src), size=src.stat().st_size)
+            rel: FileEntry(path=rel, sha256=self._hash(src), size=src.stat().st_size)
             for rel, src in sources.items()
         }
+
+    def _hash(self, path: Path) -> str:
+        """A file's hash. On Windows, Live keeps a loaded song's audio open and
+        nobody else may read it: a status check then goes by what is already
+        known (it was checked, or copied here verified, at that size); a push
+        says to close the song in Live."""
+        from sessionsync.core.errors import FileInUseError
+
+        path = Path(path)
+        try:
+            return self.hash_cache.hash_file(path)
+        except PermissionError:
+            if not self._looking:
+                raise FileInUseError(path) from None
+        rel = path.relative_to(self.project_root).as_posix() if path.is_relative_to(self.project_root) else ""
+        self.in_use.append(rel or path.name)
+        known = self.hash_cache.last_known(path)
+        if known is None and rel:
+            base = self.base_files().get(rel)
+            size = path.stat().st_size
+            if base is not None and base.size == size:
+                known = base.source_sha256 or base.sha256
+        # Unknown and unreadable (Live recording into it): shown as changed, checked later.
+        return known or f"in-use:{path.stat().st_size}:{path.stat().st_mtime_ns}"
+
+    def _look(self, work):
+        """Run a read-only look at the project, tolerating files Live holds open."""
+        self._looking, self.in_use = True, []
+        try:
+            return work()
+        finally:
+            self._looking = False
 
     def _as_shared(self, files: dict[str, FileEntry]) -> dict[str, FileEntry]:
         """A Set this computer pushed (and Consolidate rewrote) counts as unchanged."""
@@ -305,13 +339,13 @@ class Repository:
         Always against that version, never against "when you pressed start":
         work done before the app was looking is still work to push.
         """
-        return diff_file_maps(self.base_files(), self.scan())
+        return diff_file_maps(self.base_files(), self._look(self.scan))
 
     def status(self) -> Status:
         from sessionsync.core.session import active_sessions
 
         remote_version = self.remote_version()
-        files = self.scan()
+        files = self._look(self.scan)
         diff = diff_file_maps(self.base_files(), files)
 
         project_bytes = sum(e.size for e in files.values())
@@ -644,7 +678,7 @@ class Repository:
         for path, entry in sorted(target.files.items()):
             local = self.project_root / path
             if local.exists():
-                if entry.matches(self.hash_cache.hash_file(local)):
+                if entry.matches(self._hash(local)):
                     continue  # already have exactly this content
                 if path not in diff.added and path not in diff.modified:
                     continue  # locally edited, and this version does not change it
@@ -663,6 +697,7 @@ class Repository:
                 if edits:
                     raise DriveEditsError(edits) from None
                 raise
+            self.hash_cache.remember(local, entry.sha256)  # copied and verified: never read again
             downloaded += entry.size
 
         # Files the new version no longer uses stay on this computer: an older
@@ -721,7 +756,7 @@ class Repository:
             local = self.project_root / path
             if not local.exists():
                 missing.append(entry)
-            elif not entry.matches(self.hash_cache.hash_file(local)):
+            elif not entry.matches(self._hash(local)):
                 if not path.startswith("Ableton Project Info/"):
                     conflicts.append(path)
 
@@ -834,7 +869,7 @@ class Repository:
             unchanged = (
                 entry is not None
                 and target.exists()
-                and entry.matches(self.hash_cache.hash_file(target))
+                and entry.matches(self._hash(target))
             )
             if unchanged and not behind:
                 trash = trash or self._new_trash_folder()
