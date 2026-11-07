@@ -53,8 +53,12 @@ def _files(n: int) -> str:
     return f"{n} file" if n == 1 else f"{n} files"
 
 
-def ask_push(parent, snapshot) -> str | None:
-    """What Push is about to do, then a note. Returns the note, or None."""
+def ask_push(parent, snapshot, *, live_closed: bool = False) -> str | None:
+    """What Push is about to do, then a note. Returns the note, or None.
+
+    `live_closed`: asked because Live just closed the song, so the set is saved
+    (Live asks about unsaved changes as it closes) and "not now" is a fine answer.
+    """
     lines, problems = push_preview(snapshot)
     dialog = QDialog(parent)
     dialog.setWindowTitle("Push")
@@ -62,7 +66,15 @@ def ask_push(parent, snapshot) -> str | None:
     layout = QVBoxLayout(dialog)
     layout.setSpacing(10)
 
-    heading = QLabel(f"Push {snapshot.project_name} to the shared folder?")
+    if live_closed:
+        dialog.setWindowTitle(f"You closed {snapshot.project_name}")
+        heading = QLabel(
+            f"You closed {snapshot.project_name} in Live. Push your changes now, so the "
+            "others get them?\n\nNot now is fine — they stay on this computer, and the "
+            "others can see you have changes waiting."
+        )
+    else:
+        heading = QLabel(f"Push {snapshot.project_name} to the shared folder?")
     heading.setWordWrap(True)
     layout.addWidget(heading)
 
@@ -80,6 +92,7 @@ def ask_push(parent, snapshot) -> str | None:
         layout.addWidget(label)
 
     saved = QCheckBox("I saved the set in Live")
+    saved.setChecked(live_closed)  # closing Live is when it asks to save
     layout.addWidget(saved)
 
     note = QLineEdit()
@@ -88,7 +101,7 @@ def ask_push(parent, snapshot) -> str | None:
 
     buttons = QDialogButtonBox()
     go = buttons.addButton("Push", QDialogButtonBox.AcceptRole)
-    buttons.addButton("Cancel", QDialogButtonBox.RejectRole)
+    buttons.addButton("Not Now" if live_closed else "Cancel", QDialogButtonBox.RejectRole)
     layout.addWidget(buttons)
 
     def update() -> None:

@@ -295,3 +295,104 @@ def _answer_quit(window, allow):
 
     window._confirm_quit = fake
     return asked
+
+
+# --- closing the song in Live ------------------------------------------------
+
+
+def _asked_to_push(monkeypatch):
+    from sessionsync.ui import pane as pane_module
+
+    asked = []
+
+    def fake(parent, snapshot, *, live_closed=False):
+        asked.append(live_closed)
+        return None  # "Not Now"
+
+    monkeypatch.setattr(pane_module, "ask_push", fake)
+    return asked
+
+
+def test_closing_the_song_in_live_offers_to_push(window, alice, monkeypatch):
+    record(alice.project_root, "Samples/Recorded/Sax.aif", b"sax")
+    pane = window.open_project(alice.project_root)
+    asked = _asked_to_push(monkeypatch)
+
+    window.live_changed(str(alice.project_root / "My Song.als"), "")  # Live quit
+
+    assert _spin_until(lambda: asked)
+    assert asked == [True]
+    assert window.tabs.currentWidget() is pane
+
+
+def test_saying_not_now_leaves_the_work_where_it_is(window, alice, monkeypatch):
+    record(alice.project_root, "Samples/Recorded/Sax.aif", b"sax")
+    window.open_project(alice.project_root)
+    asked = _asked_to_push(monkeypatch)
+
+    window.live_changed(str(alice.project_root / "My Song.als"), "")
+
+    assert _spin_until(lambda: asked)
+    assert (alice.project_root / "Samples" / "Recorded" / "Sax.aif").exists()
+    assert alice.remote_version() == 1, "Not Now pushes nothing"
+
+
+def test_closing_live_with_nothing_changed_asks_nothing(window, alice, monkeypatch):
+    pane = window.open_project(alice.project_root)
+    asked = _asked_to_push(monkeypatch)
+
+    window.live_changed(str(alice.project_root / "My Song.als"), "")
+    _spin_until(lambda: pane.snapshot is not None and not pane._ask_after_live_closed)
+    _spin_until(lambda: False, 300)
+
+    assert asked == []
+
+
+def test_switching_live_to_another_song_counts_as_closing_this_one(window, alice, monkeypatch, tmp_path):
+    record(alice.project_root, "Samples/Recorded/Sax.aif", b"sax")
+    window.open_project(alice.project_root)
+    asked = _asked_to_push(monkeypatch)
+
+    window.live_changed(str(alice.project_root / "My Song.als"), str(tmp_path / "Other" / "Other.als"))
+
+    assert _spin_until(lambda: asked)
+
+
+def test_opening_another_song_in_live_does_not_ask_about_this_one(window, alice, monkeypatch, tmp_path):
+    record(alice.project_root, "Samples/Recorded/Sax.aif", b"sax")
+    pane = window.open_project(alice.project_root)
+    asked = _asked_to_push(monkeypatch)
+
+    window.live_changed("", str(tmp_path / "Other" / "Other.als"))
+    _spin_until(lambda: False, 500)
+
+    assert asked == [] and pane._ask_after_live_closed is False
+
+
+def test_if_someone_pushed_meanwhile_it_offers_catch_up_not_push(window, alice, bob, monkeypatch):
+    from tests.conftest import als_marked
+
+    (bob.project_root / "My Song.als").write_bytes(als_marked(b"bob's take"))
+    bob.push(note="Bob")
+    record(alice.project_root, "Samples/Recorded/Sax.aif", b"sax")
+    pane = window.open_project(alice.project_root)
+    asked = _asked_to_push(monkeypatch)
+    offered = []
+    monkeypatch.setattr(pane, "_confirm_catch_up_after_close", lambda: offered.append(True) or False)
+
+    window.live_changed(str(alice.project_root / "My Song.als"), "")
+
+    assert _spin_until(lambda: offered)
+    assert asked == [], "pushing is impossible until you catch up, so don't offer it"
+
+
+def test_the_live_watcher_reports_each_change_once():
+    from sessionsync.ui.livewatcher import LiveWatcher
+
+    watcher = LiveWatcher()
+    changes = []
+    watcher.changed.connect(lambda before, now: changes.append((before, now)))
+    for seen in ("/a/Song.als", "/a/Song.als", "", "", "/b/Other.als"):
+        watcher._seen(seen)
+
+    assert changes == [("", "/a/Song.als"), ("/a/Song.als", ""), ("", "/b/Other.als")]

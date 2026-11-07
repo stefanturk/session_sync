@@ -194,5 +194,12 @@ fetches whatever an old revision needs first.
   version aside first, brings theirs, and lists who changed which tracks.
 - The shared copy changes only when a push succeeds. A crash part way is finished or undone by the next client.
 - Others see "working now" (from the app, and Live's own log) and "has changes not pushed" until they do.
+- Close the song in Live (or quit Live) while Session Sync is open and, within a few seconds, it asks
+  whether to push. If someone pushed in the meantime, it offers Catch Up instead. **Not Now** leaves
+  everything on your computer, and the others see that you have changes waiting.
+- Saying Not Now and then finding someone else pushed loses nothing. Pull refuses to replace your
+  changes, and Catch Up first copies your whole version beside the project as
+  `<Song> (mine before vN, …)`. It then brings theirs in and keeps your set next to theirs as
+  `<Song> (mine).als`.
 - If Google Drive is still syncing, pulling stops with a message instead of half-copying.
 - Not built yet: automatically combining two edited sets (Catch Up keeps both sets side by side instead).

@@ -83,6 +83,7 @@ class MainWindow(QMainWindow):
         self.notifier = Notifier(on_click=self.show_news_target)
         self._hub_check: _HubCheck | None = None
         self._hub_timer: QTimer | None = None
+        self._live_watcher = None
         self._last_live_warning = None
         self._build()
 
@@ -461,6 +462,40 @@ class MainWindow(QMainWindow):
         self.start.refresh()
         self.open_project(path)
 
+    def start_live_watch(self) -> None:
+        """Notice within seconds when Live opens or closes one of these songs."""
+        from sessionsync.ui.livewatcher import LiveWatcher
+
+        if self._live_watcher is None:
+            self._live_watcher = LiveWatcher(parent=self)
+            self._live_watcher.changed.connect(self.live_changed)
+            self._live_watcher.start()
+
+    def live_changed(self, before: str, now: str) -> None:
+        """Live moved from set `before` to set `now` ("" = none, e.g. Live quit)."""
+        from sessionsync.core import livewatch
+
+        was = Path(before) if before else None
+        is_ = Path(now) if now else None
+        for pane in self.panes():
+            had = livewatch.is_open_in(pane.project_root, was)
+            has = livewatch.is_open_in(pane.project_root, is_)
+            if had and not has:
+                pane.live_closed()
+            elif has and not had:
+                pane.request_refresh.emit()  # "working" shows straight away
+
+    def focus_pane(self, pane: ProjectPane) -> None:
+        """Bring this song's tab to the front — something needs an answer."""
+        self.stack.setCurrentWidget(self.tabs)
+        self.tabs.setCurrentWidget(pane)
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        QApplication.alert(self)
+
     def start_hub_watch(self) -> None:
         """Check the shared folders now and then every minute."""
         if self._hub_timer is None:
@@ -675,6 +710,8 @@ class MainWindow(QMainWindow):
 
     def close_everything(self) -> None:
         """Stop every project's thread. Safe to call twice."""
+        if self._live_watcher is not None:
+            self._live_watcher.stop()
         for pane in self.panes():
             pane.shutdown()
 

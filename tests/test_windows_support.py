@@ -146,3 +146,15 @@ def test_a_development_run_never_takes_over_the_links(monkeypatch):
     monkeypatch.delattr(sys, "frozen", raising=False)
     winscheme.register_this_app()
     assert called == []
+
+
+def test_a_long_session_does_not_lose_which_song_live_has_open(tmp_path, monkeypatch):
+    log = tmp_path / "Log.txt"
+    with log.open("w", encoding="utf-8") as fh:
+        fh.write('2026-11-06T17:45:01.000000: info: Loading document "/Users/s/Desktop/Song/Song.als"\n')
+        fh.write("2026-11-06T17:45:02.000000: info: something else\n" * 20000)
+    monkeypatch.setattr(livewatch, "_TAIL_BYTES", 10_000)
+
+    found = livewatch.last_document(log)
+
+    assert found is not None and found[1].name == "Song.als"

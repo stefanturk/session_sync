@@ -103,6 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     window = MainWindow(Settings())
     window.show()
     window.start_hub_watch()
+    window.start_live_watch()
     listener.received.connect(lambda text: _from_another_copy(app, window, text))
 
     if link:  # Windows passes the link on the command line

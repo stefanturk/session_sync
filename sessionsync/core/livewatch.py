@@ -49,16 +49,29 @@ def newest_log(prefs: Path | None = None) -> Path | None:
 
 
 def last_document(log: Path) -> tuple[datetime, Path] | None:
-    """The most recent set Live loaded, from the tail of its log."""
+    """The most recent set Live loaded, from the tail of its log.
+
+    A long session can push the "Loading document" line out of the tail; then
+    the whole log is read (Live starts a new one each launch), because missing
+    it would look like the song had been closed.
+    """
     try:
         with log.open("rb") as fh:
             fh.seek(0, 2)
-            fh.seek(max(0, fh.tell() - _TAIL_BYTES))
-            text = fh.read().decode("utf-8", errors="replace")
+            size = fh.tell()
+            fh.seek(max(0, size - _TAIL_BYTES))
+            found = _last_loading(fh.read())
+            if found is None and size > _TAIL_BYTES:
+                fh.seek(0)
+                found = _last_loading(fh.read())
     except OSError:
         return None
+    return found
+
+
+def _last_loading(data: bytes) -> tuple[datetime, Path] | None:
     found = None
-    for line in text.splitlines():
+    for line in data.decode("utf-8", errors="replace").splitlines():
         parsed = parse_loading(line)
         if parsed:
             found = parsed

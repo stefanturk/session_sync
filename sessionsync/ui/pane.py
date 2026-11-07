@@ -104,6 +104,8 @@ class ProjectPane(QWidget):
         self._checking_now = False
         self._open_after_pull = False
         self._open_on_first_snapshot = False
+        self._ask_after_live_closed = False
+        self._busy = False
 
         self._build()
         self._start_engine(self.project_root)
@@ -132,6 +134,11 @@ class ProjectPane(QWidget):
 
     def push(self) -> None:
         self._ask_for_note_and_push()
+
+    def live_closed(self) -> None:
+        """Live just closed this song (or quit): look again, then offer to push."""
+        self._ask_after_live_closed = True
+        self.request_refresh.emit()
 
     def open_in_live(self) -> None:
         self._open_clicked()
@@ -471,6 +478,9 @@ class ProjectPane(QWidget):
         if self._open_on_first_snapshot:
             self._open_on_first_snapshot = False
             QTimer.singleShot(0, self._open_clicked)
+        if self._ask_after_live_closed and not snapshot.live_open:
+            self._ask_after_live_closed = False
+            QTimer.singleShot(0, self._after_live_closed)
 
     def _show_media(self, snapshot: Snapshot) -> None:
         parts = []
@@ -504,6 +514,7 @@ class ProjectPane(QWidget):
 
     def _busy_changed(self, message: str) -> None:
         """A push or a pull: nothing else should be clickable while it runs."""
+        self._busy = bool(message)
         if message:
             self._say(message)
             for button in self._buttons():
@@ -632,6 +643,38 @@ class ProjectPane(QWidget):
         )
         if answer == QMessageBox.Ok:
             self.request_catch_up.emit()
+
+    def _after_live_closed(self) -> None:
+        """You closed the song in Live: push now? (or catch up, if someone pushed first)."""
+        snapshot = self.snapshot
+        if snapshot is None or self._busy or snapshot.live_open:
+            return
+        status = snapshot.status
+        if not status.has_local_changes or status.drive_edits:
+            return  # nothing to push; or Rescue comes first, and its banner says so
+        window = self.window()
+        if hasattr(window, "focus_pane"):
+            window.focus_pane(self)
+        if status.state == "push_blocked":
+            if self._confirm_catch_up_after_close():
+                self.request_catch_up.emit()
+            return
+        note = ask_push(self, snapshot, live_closed=True)
+        if note is not None:
+            self.request_push.emit(note)
+
+    def _confirm_catch_up_after_close(self) -> bool:
+        answer = QMessageBox.question(
+            self,
+            f"You closed {self.project_name}",
+            f"You closed {self.project_name} in Live — but someone pushed a newer "
+            "version while you were working, so yours can't go up as it is.\n\n"
+            "Catch Up keeps a full copy of YOUR version next to the project, brings "
+            "theirs in, and puts your set beside theirs as \"(mine)\" so you can "
+            "combine them in Live. Nothing is pushed until you say so.",
+            QMessageBox.Ok | QMessageBox.Cancel,
+        )
+        return answer == QMessageBox.Ok
 
     def _ask_for_note_and_push(self) -> None:
         snapshot = self.snapshot
