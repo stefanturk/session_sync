@@ -264,13 +264,12 @@ class TestSharedFolders:
         assert "Sam" in listing and "My Song  v1" in listing
         assert "loose bounce" not in listing
 
-    def test_join_downloads_under_the_local_root(self, hub_dir, song, tmp_path, monkeypatch):
-        monkeypatch.setenv("HOME", str(tmp_path / "home"))  # never touch the real one
+    def test_join_puts_the_song_on_the_desktop(self, hub_dir, song, tmp_path, no_real_desktop):
         run("hub", "add", hub_dir, "--name", "Sam")
         run("song", "new", "Sam", song)
         result = run("song", "join", "Sam", "My Song")
         assert result.exit_code == 0
-        expected = tmp_path / "home" / "Music" / "Ableton" / "SessionSync" / "Sam" / "My Song"
+        expected = no_real_desktop / "Desktop" / "My Song"
         assert (expected / "My Song.als").exists()
 
     def test_restore_builds_a_separate_copy(self, synced, tmp_path):

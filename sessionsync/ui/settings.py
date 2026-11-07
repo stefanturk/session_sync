@@ -65,9 +65,44 @@ class Settings:
         self._write(data)
 
     def local_root(self) -> Path:
-        """Where songs from other people's hubs are placed on this Mac."""
+        """Where new songs go on this computer: the Desktop unless you chose somewhere.
+
+        (Not a Desktop that iCloud syncs — see core/locations.py.)
+        """
+        from sessionsync.core import locations
+
         chosen = self._read().get("local_root")
-        return Path(chosen) if chosen else Path.home() / "Music" / "Ableton" / "SessionSync"
+        return Path(chosen) if chosen else locations.default_root()
+
+    def local_root_chosen(self) -> bool:
+        return bool(self._read().get("local_root"))
+
+    def songs(self) -> list[tuple[str, Path]]:
+        """("hub|song", where your copy is) for every song this computer has joined or shared."""
+        return [(key, Path(path)) for key, path in self._read().get("song_paths", {}).items()]
+
+    def song_by_repo(self, repository_id: str) -> Path | None:
+        """Your copy of the song with this repository id, if it is still there."""
+        from sessionsync.core.localstate import LocalState
+
+        for _, path in self.songs():
+            if not LocalState.exists(path):
+                continue
+            try:
+                state = LocalState.open(path)
+                try:
+                    if state.repository_id == repository_id:
+                        return path
+                finally:
+                    state.close()
+            except Exception:  # noqa: BLE001 - an unreadable copy is just not this one
+                continue
+        return None
+
+    def recorded_song_path(self, repository_id: str) -> Path | None:
+        """Where your copy was, even if it is gone now (for "your copy isn't there any more")."""
+        found = self._read().get("song_repos", {}).get(repository_id)
+        return Path(found) if found else None
 
     def set_local_root(self, path: Path) -> None:
         self._write({**self._read(), "local_root": str(path)})
@@ -78,9 +113,11 @@ class Settings:
         recorded = self._read().get("song_paths", {}).get(f"{hub.path}|{song}")
         return Path(recorded) if recorded else hub.local_path(song, self.local_root())
 
-    def set_song_path(self, hub: Hub, song: str, path: Path) -> None:
+    def set_song_path(self, hub: Hub, song: str, path: Path, repository_id: str | None = None) -> None:
         data = self._read()
         data.setdefault("song_paths", {})[f"{hub.path}|{song}"] = str(path)
+        if repository_id:
+            data.setdefault("song_repos", {})[repository_id] = str(path)
         self._write(data)
 
     def seen(self, hub: Hub) -> dict[str, int] | None:

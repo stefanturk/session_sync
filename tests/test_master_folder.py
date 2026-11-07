@@ -10,7 +10,7 @@ from sessionsync.core.errors import StalePushError
 from sessionsync.core.hashing import hash_file
 from sessionsync.core.repository import Repository
 from sessionsync.storage.base import NotReadyError
-from sessionsync.storage.master_folder import MasterFolderStorage
+from sessionsync.storage.master_folder import DATA_DIR, MasterFolderStorage, undisguise
 
 from tests.conftest import ALICE, BOB, write_project
 
@@ -24,7 +24,20 @@ def snapshot(folder):
     }
 
 
+def shared(storage, folder=None):
+    """The shared copy's project files under their real names (as the manifests know them)."""
+    storage = storage if isinstance(storage, MasterFolderStorage) else MasterFolderStorage(storage)
+    data = storage.data_root
+    return {
+        undisguise(p.relative_to(data).as_posix()): p.read_bytes()
+        for p in sorted(data.rglob("*"))
+        if p.is_file() and ".sessionsync" not in p.parts and "Past Revisions" not in p.parts
+    }
+
+
 def past_revisions(folder):
+    if isinstance(folder, MasterFolderStorage):
+        return sorted(undisguise(p.name) for p in (folder.data_root / "Past Revisions").glob("*.als-shared"))
     return sorted(p.name for p in (folder / "Past Revisions").glob("*.als"))
 
 
@@ -53,9 +66,9 @@ def edit(repo, name="Samples/Recorded/Vocal.wav", data=b"new take"):
 
 
 def test_master_is_a_normal_project_after_first_push(master, alice_wb):
-    assert snapshot(master.root) == snapshot(alice_wb.project_root)
+    assert shared(master) == snapshot(alice_wb.project_root)
     assert master.current_version() == 1
-    assert past_revisions(master.root) == [
+    assert past_revisions(master) == [
         f"Rev 0001 - {date.today():%Y-%m-%d} - Alice - first.als"
     ]
 
@@ -65,10 +78,10 @@ def test_every_push_saves_its_live_set_into_past_revisions(master, alice_wb, bob
 
     (alice_wb.project_root / "My Song.als").write_bytes(als_marked("chorus"))
     alice_wb.push(note="new chorus")
-    revs = past_revisions(master.root)
+    revs = past_revisions(master)
     assert len(revs) == 2 and revs[1].endswith("Alice - new chorus.als")
-    assert (master.root / "Past Revisions" / revs[1]).read_bytes() == als_marked("chorus")
-    assert (master.root / "Past Revisions" / revs[0]).read_bytes() != als_marked("chorus")
+    assert (master._visible("Past Revisions/" + revs[1])).read_bytes() == als_marked("chorus")
+    assert (master._visible("Past Revisions/" + revs[0])).read_bytes() != als_marked("chorus")
 
     bob_wb.pull()  # the small Past Revisions Sets come down with every pull
     assert past_revisions(bob_wb.project_root) == revs
@@ -80,17 +93,17 @@ def test_creating_storage_touches_nothing(tmp_path):
 
 
 def test_master_is_untouched_until_push(master, alice_wb):
-    before = snapshot(master.root)
+    before = shared(master)
     edit(alice_wb)
     alice_wb.status()
-    assert snapshot(master.root) == before
+    assert shared(master) == before
 
 
 def test_push_replaces_master_and_keeps_old_in_history(master, alice_wb):
-    old = (master.root / "Samples/Recorded/Vocal.wav").read_bytes()
+    old = (master._visible("Samples/Recorded/Vocal.wav")).read_bytes()
     edit(alice_wb)
     alice_wb.push(note="new vocal")
-    assert (master.root / "Samples/Recorded/Vocal.wav").read_bytes() == b"new take"
+    assert (master._visible("Samples/Recorded/Vocal.wav")).read_bytes() == b"new take"
     assert master.current_version() == 2
     copy = alice_wb.restore_copy(1, alice_wb.project_root.parent / "v1")
     assert (copy / "Samples/Recorded/Vocal.wav").read_bytes() == old
@@ -99,11 +112,11 @@ def test_push_replaces_master_and_keeps_old_in_history(master, alice_wb):
 def test_stale_push_is_refused_and_master_unchanged(master, alice_wb, bob_wb):
     edit(alice_wb)
     alice_wb.push()
-    before = snapshot(master.root)
+    before = shared(master)
     edit(bob_wb, data=b"bob take")
     with pytest.raises(StalePushError):
         bob_wb.push()
-    assert snapshot(master.root) == before
+    assert shared(master) == before
 
 
 def test_get_latest_brings_other_persons_version(master, alice_wb, bob_wb):
@@ -120,7 +133,7 @@ def test_a_sample_rev_2_stops_using_stays_where_rev_1_had_it(master, alice_wb):
     alice_wb.push(note="dropped the vocal")
     assert "Samples/Recorded/Vocal.wav" not in alice_wb.read_manifest(2).files
     # still in the shared folder, at its own path, so Rev 1 opens straight from Drive
-    assert (master.root / "Samples/Recorded/Vocal.wav").read_bytes() == b"vocal audio"
+    assert (master._visible("Samples/Recorded/Vocal.wav")).read_bytes() == b"vocal audio"
     copy = alice_wb.restore_copy(1, alice_wb.project_root.parent / "back")
     assert (copy / "Samples/Recorded/Vocal.wav").read_bytes() == b"vocal audio"
 
@@ -150,7 +163,7 @@ def test_pinned_version_survives_pruning(master, alice_wb):
 def test_drive_still_syncing_blocks_pull_cleanly(master, alice_wb, bob_wb):
     edit(alice_wb)
     alice_wb.push()
-    victim = master.root / "Samples/Recorded/Vocal.wav"
+    victim = master._visible("Samples/Recorded/Vocal.wav")
     victim.write_bytes(b"new")  # right name, wrong size: bytes have not all arrived
     before = snapshot(bob_wb.project_root)
     with pytest.raises(NotReadyError):
@@ -161,7 +174,7 @@ def test_drive_still_syncing_blocks_pull_cleanly(master, alice_wb, bob_wb):
 def test_missing_file_blocks_pull_cleanly(master, alice_wb, bob_wb):
     edit(alice_wb)
     alice_wb.push()
-    (master.root / "Samples/Recorded/Vocal.wav").unlink()
+    (master._visible("Samples/Recorded/Vocal.wav")).unlink()
     with pytest.raises(NotReadyError):
         bob_wb.pull()
 
@@ -199,7 +212,7 @@ def test_crash_during_commit_is_finished_by_next_client(monkeypatch, tmp_path, m
 
     fresh = MasterFolderStorage(master.root)
     assert fresh.current_version() == 2
-    assert (master.root / "Samples/Recorded/Vocal.wav").read_bytes() == b"take A"
+    assert (master._visible("Samples/Recorded/Vocal.wav")).read_bytes() == b"take A"
     bob_wb.pull()
     assert (bob_wb.project_root / "Samples/Recorded/Vocal.wav").read_bytes() == b"take A"
     copy = bob_wb.restore_copy(1, tmp_path / "old")
@@ -214,16 +227,23 @@ def test_a_push_in_progress_is_not_disturbed(master, alice_wb, bob_wb):
     assert (master.meta / "manifests" / "v000002.json").exists()
 
 
-def test_adoption_leaves_visible_files_untouched(tmp_path):
+def test_adoption_moves_the_files_into_the_data_folder_unchanged(tmp_path):
     from sessionsync.core.master import adopt
 
     folder = write_project(tmp_path / "drive" / "Their Song")
     before = snapshot(folder)
-    mtimes = {p: p.stat().st_mtime_ns for p in folder.rglob("*") if p.is_file()}
+    mtimes = {p.relative_to(folder).as_posix(): p.stat().st_mtime_ns for p in folder.rglob("*") if p.is_file()}
     adopt(folder, author=ALICE)
-    assert snapshot(folder) == before
-    assert {p: p.stat().st_mtime_ns for p in folder.rglob("*") if p.is_file() and ".sessionsync" not in p.parts} == mtimes
+    # moved one folder down (renames: Drive uploads nothing again), bytes and times unchanged
     master = MasterFolderStorage(folder)
+    assert shared(master) == before
+    data = folder / DATA_DIR
+    assert {
+        undisguise(p.relative_to(data).as_posix()): p.stat().st_mtime_ns
+        for p in data.rglob("*") if p.is_file() and "Past Revisions" not in p.parts
+    } == mtimes
+    assert not list(data.rglob("*.als"))  # nothing in Drive that Live would open
+    assert (folder / "▶ Open in Live.webloc").exists()
     assert master.current_version() == 1
     assert not (folder / ".sessionsync" / "state.db").exists()
 
@@ -234,10 +254,10 @@ def test_pull_from_an_adopted_master_and_push(tmp_path):
     folder = write_project(tmp_path / "drive" / "Their Song")
     adopt(folder, author=ALICE)
     wb = get_workbench(folder, tmp_path / "local" / "Their Song", author=BOB)
-    assert snapshot(wb.project_root) == snapshot(folder)
+    assert snapshot(wb.project_root) == shared(folder)
     edit(wb, data=b"bob")
     wb.push()
-    assert (folder / "Samples/Recorded/Vocal.wav").read_bytes() == b"bob"
+    assert (folder / DATA_DIR / "Samples/Recorded/Vocal.wav").read_bytes() == b"bob"
     assert MasterFolderStorage(folder).current_version() == 2
 
 
@@ -248,10 +268,10 @@ def test_add_local_project_to_hub(tmp_path):
     hub = tmp_path / "drive" / "Sam Stefan Sketches"
     hub.mkdir(parents=True)
     repo = add_local_project(local, hub, author=ALICE)
-    shared = hub / "Mine"
-    assert snapshot(shared) == snapshot(local)
+    shared_folder = hub / "Mine"
+    assert shared(MasterFolderStorage(shared_folder)) == snapshot(local)
     assert repo.base_version == 1
-    assert MasterFolderStorage(shared).current_version() == 1
+    assert MasterFolderStorage(shared_folder).current_version() == 1
 
 
 def test_add_refuses_existing_name_and_leaves_no_skeleton(tmp_path):
@@ -370,7 +390,7 @@ def test_catch_up_when_already_current_is_refused(alice_wb):
 def test_hand_started_session_is_not_replaced_by_automatic_presence(alice_wb):
     alice_wb.start_session()
     key = alice_wb.state.session["key"]
-    assert alice_wb.refresh_presence(live_here=False) == "working"
+    assert alice_wb.refresh_presence(live_here=True) == "working"
     assert alice_wb.state.session["key"] == key
 
 
@@ -380,6 +400,6 @@ def test_two_files_with_the_same_audio_both_land(master, alice_wb):
     record(alice_wb.project_root, "Samples/Recorded/Copy A.wav", b"same take")
     record(alice_wb.project_root, "Samples/Recorded/Copy B.wav", b"same take")
     alice_wb.push(note="duplicates")
-    assert (master.root / "Samples/Recorded/Copy A.wav").read_bytes() == b"same take"
-    assert (master.root / "Samples/Recorded/Copy B.wav").read_bytes() == b"same take"
+    assert (master._visible("Samples/Recorded/Copy A.wav")).read_bytes() == b"same take"
+    assert (master._visible("Samples/Recorded/Copy B.wav")).read_bytes() == b"same take"
     assert not (master.meta / "staging").exists()

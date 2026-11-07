@@ -32,7 +32,7 @@ def test_add_song_then_other_person_joins_and_sees_it(tmp_path):
     assert songs[0].latest_version == 1 and songs[0].latest_author == "Alice"
 
     bob = hub.join_song("Song A", tmp_path / "bob-music", BOB)
-    assert bob.project_root == tmp_path / "bob-music" / "Sam" / "Song A"
+    assert bob.project_root == tmp_path / "bob-music" / "Song A"
     assert (bob.project_root / "Song A.als").exists()
 
 
@@ -105,15 +105,15 @@ def test_a_version_still_arriving_from_drive_is_caught_next_time(tmp_path):
     assert events == [] and seen2 == {"S": 1}
 
 
-def test_join_refuses_a_folder_with_files(tmp_path):
-    import pytest
+def test_join_never_uses_a_folder_that_is_already_there(tmp_path):
     hub = make_hub(tmp_path)
     hub.add_song("S", write_project(tmp_path / "me" / "S", "S"), ALICE)
-    taken = tmp_path / "m" / "Sam" / "S"
+    taken = tmp_path / "m" / "S"
     taken.mkdir(parents=True)
     (taken / "a.txt").write_text("x")
-    with pytest.raises(FileExistsError):
-        hub.join_song("S", tmp_path / "m", BOB)
+    repo = hub.join_song("S", tmp_path / "m", BOB)
+    assert repo.project_root == tmp_path / "m" / "S (Session Sync)"
+    assert sorted(p.name for p in taken.iterdir()) == ["a.txt"]
 
 
 def test_add_song_refuses_a_name_in_use(tmp_path):

@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import (
+    QFileSystemWatcher,
     QMetaObject,
     Qt,
     QThread,
@@ -42,6 +43,7 @@ from PySide6.QtWidgets import (
 )
 
 from sessionsync.core.errors import (
+    DriveEditsError,
     LocalChangesWouldBeReplacedError,
     NothingToPushError,
     ProjectBehindError,
@@ -52,7 +54,7 @@ from sessionsync.ui import theme
 from sessionsync.ui.dialogs import ask_push, describe_catch_up
 from sessionsync.ui.engine import Engine, Snapshot
 from sessionsync.ui.notify import notify
-from sessionsync.ui.presenter import human_size, local_time, notifications, screen
+from sessionsync.ui.presenter import CHANGE_HINTS, human_size, local_time, notifications, screen
 from sessionsync.ui.widgets import Led
 
 #: The tab you are looking at. Anything you do lands here within a minute.
@@ -60,6 +62,8 @@ ACTIVE_REFRESH_MS = 60_000
 #: Tabs you are not looking at. Five large projects all rescanning every minute
 #: is real disk churn for information nobody is reading.
 BACKGROUND_REFRESH_MS = 180_000
+#: After a save in Live, wait this long for it to finish writing, then look.
+SAVE_SETTLE_MS = 2_000
 
 CHANGE_COLOURS = {
     "Added": theme.GOOD,
@@ -77,8 +81,8 @@ def _silkscreen(text: str) -> QLabel:
 class ProjectPane(QWidget):
     request_refresh = Signal()
     request_heartbeat = Signal()
-    request_start_session = Signal()
-    request_end_session = Signal()
+    request_open_live = Signal()
+    request_rescue = Signal()
     request_push = Signal(str)
     request_pull = Signal(bool)
     request_review = Signal()
@@ -98,6 +102,8 @@ class ProjectPane(QWidget):
         self.notifier = None
         self.snapshot: Snapshot | None = None
         self._checking_now = False
+        self._open_after_pull = False
+        self._open_on_first_snapshot = False
 
         self._build()
         self._start_engine(self.project_root)
@@ -110,7 +116,8 @@ class ProjectPane(QWidget):
 
     @property
     def session_open(self) -> bool:
-        return bool(self.snapshot and self.snapshot.session_open)
+        """Live has this song open (working is automatic: there is no button for it)."""
+        return bool(self.snapshot and self.snapshot.live_open)
 
     @property
     def has_unpushed_work(self) -> bool:
@@ -125,6 +132,16 @@ class ProjectPane(QWidget):
 
     def push(self) -> None:
         self._ask_for_note_and_push()
+
+    def open_in_live(self) -> None:
+        self._open_clicked()
+
+    def open_in_live_when_ready(self) -> None:
+        """Open in Live as soon as this pane knows where the song stands (a launcher click)."""
+        if self.snapshot is not None:
+            self._open_clicked()
+        else:
+            self._open_on_first_snapshot = True
 
     def reveal(self) -> None:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.project_root)))
@@ -195,6 +212,9 @@ class ProjectPane(QWidget):
         self.version_label = QLabel()
         self.version_label.setObjectName("versions")
         self.version_label.setAlignment(Qt.AlignRight)
+        self.version_label.setToolTip(
+            "Latest: the newest version anyone pushed. You have: the version your copy is on."
+        )
         right.addWidget(self.version_label)
         row.addLayout(right)
         return header
@@ -216,7 +236,24 @@ class ProjectPane(QWidget):
         self.presence_label = QLabel()
         self.presence_label.setObjectName("presence")
         self.presence_label.setWordWrap(True)
+        self.presence_label.setToolTip(
+            "Who else is on this song. Working = they have it open in Live right now."
+        )
         column.addWidget(self.presence_label)
+
+        self.note_label = QLabel()  # "you changed 4 files while the app was closed…"
+        self.note_label.setObjectName("presence")
+        self.note_label.setWordWrap(True)
+        self.note_label.setVisible(False)
+        column.addWidget(self.note_label)
+
+        self.rescue_button = QPushButton("RESCUE EDITS")
+        self.rescue_button.setCursor(Qt.PointingHandCursor)
+        self.rescue_button.setMinimumHeight(36)
+        self.rescue_button.setProperty("primary", True)
+        self.rescue_button.clicked.connect(self._rescue_clicked)
+        self.rescue_button.setVisible(False)
+        column.addWidget(self.rescue_button, alignment=Qt.AlignLeft)
 
         self.media_label = QLabel()
         self.media_label.setWordWrap(True)
@@ -230,8 +267,8 @@ class ProjectPane(QWidget):
         buttons.setContentsMargins(0, 0, 0, 0)
         buttons.setSpacing(9)
 
+        self.open_button = QPushButton()
         self.pull_button = QPushButton()
-        self.session_button = QPushButton()
         self.review_button = QPushButton()
         self.push_button = QPushButton()
         for button in self._buttons():
@@ -239,8 +276,8 @@ class ProjectPane(QWidget):
             button.setCursor(Qt.PointingHandCursor)
             buttons.addWidget(button)
 
+        self.open_button.clicked.connect(self._open_clicked)
         self.pull_button.clicked.connect(self._pull_clicked)
-        self.session_button.clicked.connect(self._toggle_session)
         self.review_button.clicked.connect(self.request_review.emit)
         self.push_button.clicked.connect(self._ask_for_note_and_push)
         return row
@@ -251,6 +288,10 @@ class ProjectPane(QWidget):
 
         heading = QHBoxLayout()
         heading.addWidget(_silkscreen("CHANGES"))
+        self.changes_hint = QLabel()
+        self.changes_hint.setObjectName("summary")
+        self.changes_hint.setStyleSheet(f"color: {theme.WARN};")
+        heading.addWidget(self.changes_hint)
         heading.addStretch(1)
         self.summary_label = QLabel()
         self.summary_label.setObjectName("summary")
@@ -270,7 +311,10 @@ class ProjectPane(QWidget):
         self.changes.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         column.addWidget(self.changes, stretch=1)
 
-        self.nothing_changed = QLabel("Nothing has changed since your last push.")
+        self.nothing_changed = QLabel(
+            "Nothing has changed since the version you are on.\n"
+            "Saved changes in Live show up here within a few seconds."
+        )
         self.nothing_changed.setObjectName("summary")
         self.nothing_changed.setAlignment(Qt.AlignCenter)
         column.addWidget(self.nothing_changed, stretch=1)
@@ -283,8 +327,8 @@ class ProjectPane(QWidget):
 
         self.request_refresh.connect(self.engine.refresh)
         self.request_heartbeat.connect(self.engine.heartbeat)
-        self.request_start_session.connect(self.engine.start_session)
-        self.request_end_session.connect(self.engine.end_session)
+        self.request_open_live.connect(self.engine.open_live)
+        self.request_rescue.connect(self.engine.rescue)
         self.request_push.connect(self.engine.push)
         self.request_pull.connect(self.engine.pull)
         self.request_review.connect(self.engine.review)
@@ -315,6 +359,28 @@ class ProjectPane(QWidget):
         self.heartbeat_timer.timeout.connect(self.request_heartbeat.emit)
         self.heartbeat_timer.start()
 
+        # A save in Live shows up in seconds, not at the next minute's check.
+        self._settle = QTimer(self)
+        self._settle.setSingleShot(True)
+        self._settle.setInterval(SAVE_SETTLE_MS)
+        self._settle.timeout.connect(self.request_refresh.emit)
+        self.watcher = QFileSystemWatcher(self)
+        self.watcher.directoryChanged.connect(lambda _path: self._settle.start())
+        self.watcher.fileChanged.connect(lambda _path: self._settle.start())
+        self._watch()
+
+    def _watch(self) -> None:
+        """Watch the folders the Live Sets are in (Live saves by replacing the file)."""
+        folders = {str(self.project_root)}
+        try:
+            for live_set in self.project_root.glob("*.als"):
+                folders.add(str(live_set.parent))
+        except OSError:
+            pass
+        missing = [f for f in folders if f not in self.watcher.directories()]
+        if missing:
+            self.watcher.addPaths(missing)
+
     # --- drawing ---------------------------------------------------------
 
     def _show(self, snapshot: Snapshot) -> None:
@@ -322,13 +388,18 @@ class ProjectPane(QWidget):
         model = screen(
             snapshot.status,
             project_name=snapshot.project_name,
-            session_open=snapshot.session_open,
             last_push=snapshot.last_push,
+            live_open=snapshot.live_open,
+            live_on_drive=snapshot.live_on_drive,
+            set_summary=snapshot.set_summary,
         )
+        self.model = model
 
         self.title_label.setText(model.title)
         self.version_label.setText(model.version_line)
         self.state_label.setText(model.state_label)
+        self.state_label.setToolTip(model.state_hint)
+        self.led.setToolTip(model.state_hint)
 
         accent, fill = theme.level_colours(model.banner.level)
         self.state_label.setStyleSheet(
@@ -354,15 +425,22 @@ class ProjectPane(QWidget):
             "\n".join(f"●  {line}" for line in model.presence.splitlines())
         )
         self.presence_label.setVisible(bool(model.presence))
+        if snapshot.late_note:
+            self.note_label.setText(f"✓  {snapshot.late_note}")
+            self.note_label.setVisible(True)
+        self.rescue_button.setVisible(model.rescue is not None)
+        if model.rescue is not None:
+            self.rescue_button.setToolTip(model.rescue.tooltip)
 
         self._show_media(snapshot)
         for name, button, state in (
+            ("open", self.open_button, model.open),
             ("pull", self.pull_button, model.pull),
-            ("start", self.session_button, model.start),
             ("review", self.review_button, model.review),
             ("push", self.push_button, model.push),
         ):
             self._apply(button, state, primary=name == model.primary)
+        self.changes_hint.setText(model.changes_hint)
 
         self.changes.clear()
         for kind, path, size in model.changes:
@@ -371,6 +449,8 @@ class ProjectPane(QWidget):
             item.setForeground(1, QColor(theme.INK))
             item.setForeground(2, QColor(theme.DIM))
             item.setTextAlignment(2, Qt.AlignRight | Qt.AlignVCenter)
+            item.setToolTip(0, CHANGE_HINTS.get(kind, ""))
+            item.setToolTip(1, f"{path}\n{CHANGE_HINTS.get(kind, '')}")
             self.changes.addTopLevelItem(item)
         self.changes.setVisible(bool(model.changes))
         self.nothing_changed.setVisible(not model.changes)
@@ -387,6 +467,10 @@ class ProjectPane(QWidget):
         self.previous_status = snapshot.status
 
         self.state_changed.emit(model.banner.level, model.state_label)
+        self._watch()
+        if self._open_on_first_snapshot:
+            self._open_on_first_snapshot = False
+            QTimer.singleShot(0, self._open_clicked)
 
     def _show_media(self, snapshot: Snapshot) -> None:
         parts = []
@@ -404,7 +488,7 @@ class ProjectPane(QWidget):
     def _apply(button: QPushButton, state, *, primary: bool = False) -> None:
         button.setText(state.label.upper())
         button.setEnabled(state.enabled)
-        button.setToolTip(state.reason)
+        button.setToolTip(state.tooltip)
         button.setDefault(primary)
         if button.property("primary") != primary:
             button.setProperty("primary", primary)
@@ -437,18 +521,101 @@ class ProjectPane(QWidget):
             self._say("")
 
     def _buttons(self) -> tuple[QPushButton, ...]:
-        return (self.pull_button, self.session_button, self.review_button, self.push_button)
+        return (self.open_button, self.pull_button, self.review_button, self.push_button,
+                self.rescue_button)
 
     # --- actions ---------------------------------------------------------
 
     def _tick(self) -> None:
         self.request_refresh.emit()
 
-    def _toggle_session(self) -> None:
-        if self.session_open:
-            self.request_end_session.emit()
-        else:
-            self.request_start_session.emit()
+    def _open_clicked(self) -> None:
+        """Open your copy in Live — after a Pull, if the song has moved on."""
+        snapshot = self.snapshot
+        behind = snapshot.status.versions_behind if snapshot else 0
+        if snapshot is not None and snapshot.live_on_drive:
+            QMessageBox.warning(
+                self, "Close the shared copy first",
+                "Live has the SHARED copy in Google Drive open. Close that set in Live "
+                "(don't save), then press Open in Live again.",
+            )
+            return
+        if snapshot is not None and snapshot.status.drive_edits:
+            QMessageBox.information(
+                self, "Rescue the edit first",
+                "Someone saved this song inside Google Drive. Press Rescue Edits first, so "
+                "that save is not lost, then open the song.",
+            )
+            return
+        if snapshot is not None and not self._others_ok(snapshot):
+            return
+        if snapshot is None or not behind:
+            self.request_open_live.emit()
+            return
+        if snapshot.status.state == "push_blocked":
+            # Your unpushed work and their newer version: Catch Up decides, not a quick open.
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setText("Someone pushed while you were working.")
+            box.setInformativeText(
+                "Catch Up first: it keeps a full copy of your version and brings theirs in. "
+                "Opening now means working on top of an old version."
+            )
+            catch = box.addButton("Catch Up…", QMessageBox.AcceptRole)
+            anyway = box.addButton("Open Anyway", QMessageBox.DestructiveRole)
+            box.addButton("Cancel", QMessageBox.RejectRole)
+            box.exec()
+            if box.clickedButton() is catch:
+                self._pull_clicked()
+            elif box.clickedButton() is anyway:
+                self.request_open_live.emit()
+            return
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        versions = f"{behind} version{'s' if behind != 1 else ''}"
+        box.setText(f"{self.project_name} is {versions} behind.")
+        box.setInformativeText("Pull the latest first, so you work on top of what everyone else did?")
+        pull_open = box.addButton("Pull && Open", QMessageBox.AcceptRole)
+        anyway = box.addButton("Open Anyway", QMessageBox.DestructiveRole)
+        box.addButton("Cancel", QMessageBox.RejectRole)
+        box.setDefaultButton(pull_open)
+        box.exec()
+        if box.clickedButton() is pull_open:
+            self._open_after_pull = True
+            self.request_pull.emit(False)
+        elif box.clickedButton() is anyway:
+            self.request_open_live.emit()
+
+    def _others_ok(self, snapshot) -> bool:
+        """Someone else working on it right now: say so before you both record."""
+        from sessionsync.core.session import is_working
+
+        working = [s.get("display_name") or "Someone" for s in snapshot.status.active_sessions
+                   if is_working(s)]
+        if not working or snapshot.live_open:
+            return True
+        who = ", ".join(dict.fromkeys(working))
+        answer = QMessageBox.question(
+            self, f"{who} is working on it",
+            f"{who} has {self.project_name} open right now. Call each other first, so "
+            "you don't both change it — only one of you can push without catching up.\n\n"
+            "Open it anyway?",
+            QMessageBox.Open | QMessageBox.Cancel,
+        )
+        return answer == QMessageBox.Open
+
+    def _rescue_clicked(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Rescue the edit made in Drive",
+            "Someone opened the song straight from the shared folder in Google Drive and "
+            "saved it there.\n\nRescue brings that save into your copy (beside your own "
+            "set if you have changes of your own), and puts the shared copy back the way "
+            "it was pushed. Nothing is deleted.",
+            QMessageBox.Ok | QMessageBox.Cancel,
+        )
+        if answer == QMessageBox.Ok:
+            self.request_rescue.emit()
 
     def _pull_clicked(self) -> None:
         state = self.snapshot.status.state if self.snapshot else ""
@@ -487,13 +654,17 @@ class ProjectPane(QWidget):
                 self._say("Already on the latest version.", 8000)
             else:
                 self._say(f"Updated to v{result.to_version}.", 15000)
+            if self._open_after_pull:
+                self._open_after_pull = False
+                self.request_open_live.emit()
         elif name == "catch_up":
             self._say(f"Caught up to v{result.pulled.to_version}.", 15000)
             QMessageBox.information(self, "You are caught up", describe_catch_up(result))
-        elif name == "start_session":
-            self._say("Marked as working. Go and make some noise.", 8000)
-        elif name == "end_session":
-            self._say("Done. Nothing was pushed.", 8000)
+        elif name == "open_live":
+            self._say(f"Opening {result.name} in Live — your own copy.", 10000)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(result)))
+        elif name == "rescue":
+            self._show_rescued(result)
         elif name == "review":
             self._show_review(result)
         elif name == "history":
@@ -505,7 +676,25 @@ class ProjectPane(QWidget):
             self._say(f"Restored a copy to {result}.", 15000)
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.parent)))
 
+    def _show_rescued(self, rescued) -> None:
+        if not rescued:
+            self._say("Nothing to rescue — someone already did.", 10000)
+            return
+        lines = []
+        for item in rescued:
+            if item.replaced:
+                lines.append(f"• {item.path.name} now has the edit. Push when you are happy with it.")
+            else:
+                lines.append(
+                    f"• Saved beside your set as “{item.path.name}”. Open it in Live to "
+                    "compare, keep what you want, then delete it."
+                )
+        QMessageBox.information(
+            self, "Edit rescued", "\n".join(lines) + "\n\nThe shared copy is back the way it was pushed."
+        )
+
     def _operation_failed(self, name: str, error: Exception) -> None:
+        self._open_after_pull = False
         if isinstance(error, LocalChangesWouldBeReplacedError):
             self._confirm_replacing_local_work(error)
             return
@@ -517,6 +706,9 @@ class ProjectPane(QWidget):
         box.setIcon(QMessageBox.Warning)
         if isinstance(error, (StalePushError, ProjectBehindError)):
             box.setText("Someone else pushed first.")
+            box.setInformativeText(str(error))
+        elif isinstance(error, DriveEditsError):
+            box.setText("The song was saved inside Google Drive.")
             box.setInformativeText(str(error))
         else:
             box.setText("That did not work.")
@@ -612,16 +804,16 @@ class ProjectPane(QWidget):
         self.thread.wait(3000)
 
     def _end_session_before_closing(self) -> None:
-        """Delete the heartbeat now, rather than letting it age out.
+        """Leave a true presence note behind, rather than a stale "working".
 
-        Always asked, never guessed from `self.snapshot`: that can be minutes
-        old on a background tab, and skipping the call because it says no
-        session is open leaves the ghost this exists to prevent. The engine
-        checks the repository and does nothing when there is nothing to do.
+        Closing a tab ends nothing: with Live still open on the song it says
+        "working", with unpushed changes it says so, and otherwise the note is
+        removed. The engine decides from the repository, never from
+        `self.snapshot`, which can be minutes old on a background tab.
 
         Emitting a signal and quitting the thread would race — the queued slot
         may never run — so this one call is synchronous. It is a small file
-        delete on the way out.
+        write on the way out.
         """
         if not self.thread.isRunning() or self.thread is QThread.currentThread():
             return

@@ -272,9 +272,9 @@ def test_push_sends_only_used_files_and_a_friend_can_open_the_result(tmp_path, m
     alice = Repository.create(song, master, adapter=AbletonAdapter(), author=ALICE)
     alice.push(note="first")
 
-    assert not (master.root / "Samples/Recorded/Old Take.wav").exists()
-    assert (master.root / "Samples/Imported/Room Mic.wav").read_bytes() == b"room mic audio"
-    assert refs_in((master.root / "My Song.als").read_bytes())[1] == ("3", "Samples/Imported/Room Mic.wav")
+    assert not (master._visible("Samples/Recorded/Old Take.wav")).exists()
+    assert (master._visible("Samples/Imported/Room Mic.wav")).read_bytes() == b"room mic audio"
+    assert refs_in((master._visible("My Song.als")).read_bytes())[1] == ("3", "Samples/Imported/Room Mic.wav")
 
     # Alice's own copy is not "changed" just because the shared Set was rewritten
     assert alice.status().state == "up_to_date"
@@ -364,5 +364,5 @@ def test_an_empty_ableton_project_info_folder_still_exists_on_both_sides(tmp_pat
     alice.push(note="first")
     bob = Repository.clone(master, tmp_path / "bob" / "My Song", author=BOB)
 
-    assert (master.root / "Ableton Project Info").is_dir()
+    assert (master._visible("Ableton Project Info")).is_dir()
     assert (bob.project_root / "Ableton Project Info").is_dir()

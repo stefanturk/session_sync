@@ -195,6 +195,13 @@ def status(project: Path = PROJECT_OPTION) -> None:
             "  Pull latest first — your own recordings are kept."
         )
 
+    if st.drive_edits:
+        typer.echo(
+            "\n  Someone saved the song inside the shared folder in Google Drive:\n"
+            + "\n".join(f"    {p}" for p in st.drive_edits)
+            + "\n  Run `sessionsync rescue` to bring that save into your copy."
+        )
+
     others = describe_sessions(st.active_sessions)
     if others:
         typer.echo("\n" + "\n".join(f"  {line}" for line in others.splitlines()))
@@ -364,6 +371,49 @@ def open_rev(
         )
     if not no_open and sys.platform == "darwin":
         subprocess.run(["open", str(live_set)], check=False)
+
+
+@app.command("open")
+def open_live(
+    project: Path = PROJECT_OPTION,
+    no_open: bool = typer.Option(False, "--no-open", help="Only say which set it would open."),
+) -> None:
+    """Open your copy of the song in Live (never the shared copy in Drive)."""
+    import subprocess
+    import sys
+
+    repo = _open(project)
+    try:
+        target = repo.open_target()
+    except SessionSyncError as exc:
+        _fail(exc)
+    behind = repo.remote_version() - repo.base_version
+    if behind > 0:
+        typer.echo(f"Note: you are {behind} version(s) behind — `sessionsync pull` first.")
+    typer.echo(f"Opening {target}")
+    repo.refresh_presence(live_here=True)
+    if not no_open and sys.platform == "darwin":
+        subprocess.run(["open", str(target)], check=False)
+
+
+@app.command()
+def rescue(project: Path = PROJECT_OPTION) -> None:
+    """Bring a save made straight into the shared Drive copy into your copy."""
+    repo = _open(project)
+    edits = repo.drive_edits()
+    if not edits:
+        typer.echo("Nothing to rescue: nobody saved the song inside the shared folder.")
+        return
+    try:
+        rescued = repo.rescue_drive_edits()
+    except SessionSyncError as exc:
+        _fail(exc)
+    for item in rescued:
+        if item.replaced:
+            typer.echo(f"{item.path.name} now has the edit. Push when you are happy with it.")
+        else:
+            typer.echo(f"Saved beside your set as {item.path} — open it in Live to compare.")
+    typer.echo("The shared copy is back the way it was pushed.")
 
 
 @app.command()

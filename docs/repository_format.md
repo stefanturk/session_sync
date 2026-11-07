@@ -1,4 +1,4 @@
-# Repository format v1
+# Repository format (v2)
 
 A repository is a content-addressed object store plus an append-only set of
 numbered manifests. It is deliberately dumb: any backend that can store bytes
@@ -22,7 +22,7 @@ Written once at creation and not depended on afterwards:
 
 ```json
 {
-  "repository_format_version": 1,
+  "repository_format_version": 2,
   "repository_id": "uuid",
   "project_name": "My Song",
   "project_format": "ableton",
@@ -114,17 +114,36 @@ later, explicit, grace-period-protected operation.
 ## The shared-folder layout (`MasterFolderStorage`)
 
 The Google Drive shared copy uses the same manifests, but keeps the project's
-files visible at their own paths instead of in `objects/`, so it opens in Live:
+files visible instead of in `objects/`. Since `repository_format_version` 2
+they sit one folder down, and every Live Set carries the suffix `.als-shared`,
+so double-clicking in Drive never opens (and saves over) the shared copy:
 
 ```
 My Song/
-  My Song.als                   the current revision, as Consolidate prepared it
-  Samples/…                     every file any revision has used
-  Past Revisions/Rev 0001 … .als
+  ▶ Open in Live.webloc         sessionsync://open?repo=<repository_id>&song=<name>
+  Read me.txt
+  Song data — managed by Session Sync/
+    My Song.als-shared          the current revision, as Consolidate prepared it
+    Samples/…                   every file any revision has used
+    Past Revisions/Rev 0001 … .als-shared
   .sessionsync/manifests/       v000001.json + v000001.committed …
   .sessionsync/history/objects/ old content of files that were overwritten
   .sessionsync/staging/         objects of a push in progress
+  .sessionsync/rescued/         Live Sets someone saved straight into Drive
+  .sessionsync/trash/           anything else tidied away (Live's Backup/ …)
 ```
+
+Manifests always use the real names (`My Song.als`); only `_visible` maps
+them. Format 1 (files at the top, plain `.als`) is still read; `migrate()`
+moves it to format 2 under the commit lock, by renames only, writing the format
+number last (a `.sessionsync/migrating` marker lets the next client finish a
+move that was cut short). An app refuses to pull or push a format number
+higher than it knows.
+
+A Live Set in the data folder whose bytes match no manifest — or a plain `.als`
+— was saved in Drive directly. `drive_edits()` lists them; `rescue_drive_edits()`
+moves them to `rescued/`, restores the pushed set (from history, an older path,
+or the rescuer's own matching copy) and moves Live's `Backup/` to `trash/`.
 
 - A file a newer revision no longer uses is **left in place**, never moved or
   deleted, so every Past Revision opens straight from the folder.

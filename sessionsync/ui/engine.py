@@ -38,6 +38,11 @@ class Snapshot:
     unused_bytes: int = 0
     packs: list[str] = field(default_factory=list)           # Ableton Packs a collaborator needs
     problems: list[str] = field(default_factory=list)        # reasons Push would stop
+    live_open: bool = False        # Live has YOUR copy of this song open
+    live_on_drive: bool = False    # Live has the shared copy in Drive open (the mistake)
+    set_summary: str = ""          # "Changed Main, Drums" — inside the main Live Set
+    #: said once: changes made while the app was not looking ("…that's fine")
+    late_note: str = ""
 
 
 class Engine(QObject):
@@ -51,6 +56,7 @@ class Engine(QObject):
         super().__init__()
         self.project_root = Path(project_root)
         self._repo: Repository | None = None
+        self._first_snapshot = True
 
     # --- slots the window invokes (queued onto this thread) --------------
 
@@ -87,10 +93,9 @@ class Engine(QObject):
         if repo is None:
             return
         try:
-            if repo.state.session and not repo.state.session.get("auto"):
-                repo.end_session()
-            # Leaves "unpushed changes" for the others to see, or clears the note.
-            repo.refresh_presence(live_here=False)
+            # Closing a tab ends nothing: the note stays true — "working" while Live
+            # has the song open, "unpushed changes" while there are some, else gone.
+            repo.refresh_presence(live_here=self._live_here(repo))
         except Exception:  # noqa: BLE001 - nothing useful to do while closing
             pass
 
@@ -100,10 +105,29 @@ class Engine(QObject):
         if repo is None:
             return
         try:
-            live_here = livewatch.is_open_in(repo.project_root, livewatch.open_document())
-            repo.refresh_presence(live_here)
+            repo.refresh_presence(self._live_here(repo))
         except Exception:  # noqa: BLE001 - a missed heartbeat is not worth a dialog
             pass
+
+    @Slot()
+    def open_live(self) -> None:
+        """Open your copy's main Live Set (the window does the actual opening)."""
+
+        def work():
+            repo = self._repository()
+            target = repo.open_target()
+            repo.refresh_presence(live_here=True)  # you are working now: tell the others
+            return target
+
+        self._run("open_live", "Opening in Live…", work)
+
+    @Slot()
+    def rescue(self) -> None:
+        self._run(
+            "rescue",
+            "Rescuing the edit made in Drive…",
+            lambda: self._repository().rescue_drive_edits(),
+        )
 
     @Slot(str)
     def push(self, note: str) -> None:
@@ -172,10 +196,50 @@ class Engine(QObject):
                 pass
             self.busy_changed.emit("")
 
+    @staticmethod
+    def _live_here(repo: Repository) -> bool:
+        try:
+            return livewatch.is_open_in(repo.project_root, livewatch.open_document())
+        except Exception:  # noqa: BLE001 - best effort only
+            return False
+
+    def _live_flags(self, repo: Repository) -> tuple[bool, bool]:
+        """(Live has my copy open, Live has the shared Drive copy open)."""
+        try:
+            document = livewatch.open_document()
+        except Exception:  # noqa: BLE001
+            return False, False
+        shared = getattr(repo.storage, "root", None)
+        mine = livewatch.is_open_in(repo.project_root, document)
+        drive = shared is not None and livewatch.is_open_in(Path(shared), document)
+        return mine, drive
+
+    def _late_note(self, repo: Repository, status: Status) -> str:
+        """Changes made while the app was closed: say so once, and say it's fine."""
+        first, self._first_snapshot = self._first_snapshot, False
+        diff = status.diff
+        seen = repo.state.seen_changes
+        if not diff.has_changes:
+            if seen is not None:
+                repo.state.seen_changes = None
+            return ""
+        mark = repo.changes_fingerprint(diff)
+        if seen != mark:
+            repo.state.seen_changes = mark
+        if not first or seen == mark or status.versions_behind:
+            return ""
+        count = len(diff.added) + len(diff.modified) + len(diff.deleted)
+        files = "file" if count == 1 else "files"
+        return (
+            f"You changed {count} {files} since v{status.local_version} while Session Sync "
+            "was closed — that's fine, nobody pushed in the meantime."
+        )
+
     def _emit_snapshot(self) -> None:
         repo = self._repository()
         status = repo.status()
         plan = status.plan  # Consolidate: what Push would send, and what it leaves here
+        live_open, live_on_drive = self._live_flags(repo)
         self.snapshot_ready.emit(
             Snapshot(
                 project_root=repo.project_root,
@@ -183,6 +247,10 @@ class Engine(QObject):
                 status=status,
                 session_open=bool(repo.state.session),
                 last_push=repo.state.last_push,
+                live_open=live_open,
+                live_on_drive=live_on_drive,
+                set_summary=repo.set_summary(status.diff) if status.diff.has_changes else "",
+                late_note=self._late_note(repo, status),
                 media_outside=[str(p) for p in plan.imported.values()] if plan else [],
                 media_missing=list(plan.missing) if plan else [],
                 unused=list(plan.unused) if plan else [],

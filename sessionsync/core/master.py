@@ -21,7 +21,7 @@ from sessionsync.core.errors import NotAProjectError
 from sessionsync.core.hashing import HashCache
 from sessionsync.core.localstate import LocalState
 from sessionsync.core.manifest import Manifest, build_file_map
-from sessionsync.core.repository import REPOSITORY_FORMAT_VERSION, Repository
+from sessionsync.core.repository import Repository
 from sessionsync.core.summary import summarise
 from sessionsync.storage.master_folder import MasterFolderStorage
 
@@ -61,7 +61,9 @@ def adopt(folder: Path, *, author: dict, adapter: AbletonAdapter | None = None) 
             cache.close()
     tracks = _tracks(adapter, folder)
     metadata = {
-        "repository_format_version": REPOSITORY_FORMAT_VERSION,
+        # The files are where the person put them (format 1) until `migrate`
+        # below moves them into the format-2 layout.
+        "repository_format_version": 1,
         "repository_id": str(uuid.uuid4()),
         "project_name": folder.name,
         "project_format": adapter.format_name,
@@ -82,6 +84,7 @@ def adopt(folder: Path, *, author: dict, adapter: AbletonAdapter | None = None) 
     )
     storage.write_repo_metadata(metadata)
     storage.publish_manifest(1, manifest.to_json().encode("utf-8"))
+    storage.migrate()
     return manifest
 
 

@@ -98,16 +98,31 @@ def test_the_header_names_unpushed_work():
     assert screen(status, project_name="X").state_label == "NOT PUSHED"
 
 
-def test_an_open_session_is_stated_in_the_header():
-    model = screen(make_status("up_to_date"), project_name="X", session_open=True)
-    assert model.state_label == "SESSION OPEN"
+def test_the_song_open_in_live_is_stated_in_the_header():
+    model = screen(make_status("up_to_date"), project_name="X", live_open=True)
+    assert model.state_label == "OPEN IN LIVE"
+    assert "press ⌘S" in model.changes_hint  # unsaved work in Live is invisible to us
 
 
-def test_an_open_session_never_hides_that_you_are_behind():
-    model = screen(
-        make_status("behind", local=1, remote=2), project_name="X", session_open=True
-    )
+def test_live_open_on_an_old_version_is_an_alarm():
+    model = screen(make_status("behind", local=1, remote=2), project_name="X", live_open=True)
     assert model.state_label == "1 VERSION BEHIND"
+    assert model.banner.level == "danger" and "Don't save" in model.banner.text
+
+
+def test_live_open_on_the_shared_drive_copy_outranks_everything():
+    model = screen(make_status("local_changes", added={"a": "a"}), project_name="X",
+                   live_on_drive=True)
+    assert model.banner.level == "danger" and "SHARED copy" in model.banner.text
+
+
+def test_a_save_made_in_drive_offers_rescue_and_blocks_push():
+    status = make_status("local_changes", added={"a": "a"})
+    status.drive_edits = ["Song data/My Song.als-shared"]
+    model = screen(status, project_name="X")
+    assert model.rescue is not None and model.primary == "rescue"
+    assert not model.push.enabled and "Rescue" in model.push.reason
+    assert model.state_label == "RESCUE NEEDED"
 
 
 # --- the buttons ---------------------------------------------------------
@@ -124,22 +139,10 @@ def test_pull_is_offered_when_behind():
     assert model.pull.enabled
 
 
-def test_you_cannot_start_a_session_from_an_old_version():
-    model = screen(make_status("behind", local=1, remote=2), project_name="My Song")
-    assert not model.start.enabled
-    assert "Pull the latest" in model.start.reason
-
-
-def test_start_session_is_offered_when_current():
+def test_there_is_no_start_or_done_button_working_is_automatic():
     model = screen(make_status("up_to_date"), project_name="My Song")
-    assert model.start.enabled
-    assert model.start.label == "Start Working"
-
-
-def test_an_open_session_offers_to_end_it():
-    model = screen(make_status("up_to_date"), project_name="My Song", session_open=True)
-    assert model.start.label == "Done Working"
-    assert model.start.enabled
+    assert not hasattr(model, "start")
+    assert model.open.label == "Open in Live" and model.open.enabled
 
 
 def test_push_needs_something_to_push():
@@ -170,10 +173,13 @@ def test_review_follows_having_changes():
 @pytest.mark.parametrize("state", ["up_to_date", "behind", "local_changes", "push_blocked"])
 def test_buttons_are_never_hidden(state):
     model = screen(make_status(state, local=1, remote=2), project_name="X")
-    for button in (model.pull, model.start, model.review, model.push):
+    for button in (model.open, model.pull, model.review, model.push):
         assert button.label
+        assert button.hint, f"{button.label} has no hover hint"
+        assert button.tooltip
         if not button.enabled:
             assert button.reason, f"{button.label} is disabled without saying why"
+            assert button.reason in button.tooltip
 
 
 # --- the one thing to do next --------------------------------------------
@@ -193,13 +199,8 @@ def test_pushing_is_the_thing_to_do_when_you_have_unpushed_work():
     assert screen(status, project_name="X").primary == "push"
 
 
-def test_starting_a_session_is_the_thing_to_do_when_all_is_current():
-    assert screen(make_status("up_to_date"), project_name="X").primary == "start"
-
-
-def test_nothing_is_urged_while_a_session_is_already_open_and_untouched():
-    model = screen(make_status("up_to_date"), project_name="X", session_open=True)
-    assert model.primary == ""
+def test_opening_the_song_is_the_thing_to_do_when_all_is_current():
+    assert screen(make_status("up_to_date"), project_name="X").primary == "open"
 
 
 def test_the_primary_action_is_always_one_that_can_be_clicked():

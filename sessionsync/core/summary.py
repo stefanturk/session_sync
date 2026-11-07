@@ -12,6 +12,7 @@ from sessionsync.core.manifest import Manifest, ManifestDiff, diff_manifests
 
 MEDIA = (".wav", ".aif", ".aiff", ".mp3", ".flac", ".m4a", ".ogg")
 _SHOW = 3
+_ALWAYS = ("Main", "Song")
 
 
 def _names(names: list[str]) -> str:
@@ -34,14 +35,17 @@ def summarise(
 ) -> str:
     """One short line. `first` marks the opening version of a project."""
     if first:
-        if new_tracks:
-            return f"First version · {_count(len(new_tracks), 'track')}"
+        tracks = [t for t in (new_tracks or {}) if t not in _ALWAYS]
+        if tracks:
+            return f"First version · {_count(len(tracks), 'track')}"
         return "First version"
 
     parts: list[str] = []
     if old_tracks is not None and new_tracks is not None:
-        added = [t for t in new_tracks if t not in old_tracks]
-        removed = [t for t in old_tracks if t not in new_tracks]
+        # "Main" and "Song" are always there; older versions just did not record
+        # them, so only a change to them is news.
+        added = [t for t in new_tracks if t not in old_tracks and t not in _ALWAYS]
+        removed = [t for t in old_tracks if t not in new_tracks and t not in _ALWAYS]
         changed = [t for t in new_tracks if t in old_tracks and new_tracks[t] != old_tracks[t]]
         if added:
             parts.append(f"Added {_names(added)}")

@@ -39,6 +39,11 @@ def world(qt_app, tmp_path, monkeypatch):
     monkeypatch.setattr(
         QFileDialog, "getExistingDirectory", staticmethod(lambda *a, **k: str(tmp_path / "music" / "Sam"))
     )
+    from sessionsync.core.locations import free_folder
+
+    monkeypatch.setattr(
+        MainWindow, "_ask_where", lambda self, hub, song, found: free_folder(settings.local_root(), song)
+    )
     window = MainWindow(settings)
     yield window, settings, hub
     window.close_everything()
@@ -110,3 +115,77 @@ def test_the_notifier_uses_the_plain_banner_when_there_is_no_tray(qt_app, monkey
     monkeypatch.setattr(QSystemTrayIcon, "isSystemTrayAvailable", staticmethod(lambda: False))
     Notifier().show("hello", title="Sam")
     assert len(no_real_notifications) == 1  # went through the (stubbed) osascript path
+
+
+# --- "▶ Open in Live" links in the shared folder ---------------------------------
+
+
+def _repo_id(hub, song):
+    return hub.storage_for(song).read_repo_metadata()["repository_id"]
+
+
+def test_a_launcher_link_for_a_song_i_have_opens_my_copy_in_live(world, monkeypatch):
+    from sessionsync.core.launcher import link_for
+    from sessionsync.ui.pane import ProjectPane
+
+    window, settings, hub = world
+    window.open_song(hub, "Song B")
+    window.close_tab(0)
+    opened = []
+    monkeypatch.setattr(ProjectPane, "open_in_live_when_ready", lambda self: opened.append(self.project_root))
+
+    assert window.open_link(link_for(_repo_id(hub, "Song B"), "Song B"))
+
+    assert opened == [settings.song_path(hub, "Song B")]
+
+
+def test_a_launcher_link_for_a_song_i_do_not_have_gets_it_first(world, monkeypatch):
+    from sessionsync.core.launcher import link_for
+    from sessionsync.ui.pane import ProjectPane
+
+    window, settings, hub = world
+    opened = []
+    monkeypatch.setattr(ProjectPane, "open_in_live_when_ready", lambda self: opened.append(self.project_root))
+
+    window.open_link(link_for(_repo_id(hub, "Song B"), "Song B"))
+
+    assert window.tabs.count() == 1
+    assert opened and (opened[0] / "Song B.als").exists()
+    assert opened[0].parent == settings.local_root()  # straight in the chosen folder
+
+
+def test_a_launcher_link_for_an_unknown_shared_folder_asks_to_connect_it(world, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    window, _, _ = world
+    shown = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: shown.append(self.text()) or 0)
+
+    window.open_link("sessionsync://open?repo=nobody-knows&song=Mystery")
+
+    assert shown and "Connect the shared folder" in shown[0]
+    assert window.tabs.count() == 0
+
+
+def test_a_moved_copy_is_noticed(world, monkeypatch):
+    import shutil
+
+    from PySide6.QtWidgets import QMessageBox
+    from sessionsync.core.launcher import link_for
+
+    window, settings, hub = world
+    window.open_song(hub, "Song B")
+    local = settings.song_path(hub, "Song B")
+    window.close_tab(0)
+    shutil.move(str(local), str(local.parent / "moved"))
+    shown = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: shown.append(self.text()) or 0)
+
+    window.open_link(link_for(_repo_id(hub, "Song B"), "Song B"))
+
+    assert shown and "not at" in shown[0]
+
+
+def test_links_that_are_not_ours_are_not_handled(world):
+    window, _, _ = world
+    assert window.open_link("https://example.com") is False

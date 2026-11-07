@@ -109,6 +109,15 @@ def als_with_tracks(tracks: dict[str, str], samples=(VOCAL,)) -> bytes:
 
 
 @pytest.fixture(autouse=True)
+def no_real_desktop(monkeypatch, tmp_path):
+    """New songs default to the Desktop: in tests that is a pretend one."""
+    user = tmp_path / "user-home"
+    (user / "Desktop").mkdir(parents=True)
+    monkeypatch.setenv("SESSIONSYNC_USER_HOME", str(user))
+    return user
+
+
+@pytest.fixture(autouse=True)
 def no_real_notifications(monkeypatch):
     monkeypatch.setenv("SESSIONSYNC_NO_NOTIFY", "1")  # tray banners too
     """Tests must never pop real macOS banners ("My Song: Bob finished working").

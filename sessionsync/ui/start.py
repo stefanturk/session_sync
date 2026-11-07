@@ -31,6 +31,7 @@ class StartScreen(QWidget):
     open_requested = Signal()
     connect_requested = Signal()
     song_chosen = Signal(object, str)  # Hub, song name
+    live_requested = Signal(object, str)  # Hub, song name: open it in Live straight away
     add_requested = Signal(object)  # Hub
 
     def __init__(self, settings: Settings, parent: QWidget | None = None, me: dict | None = None):
@@ -68,6 +69,9 @@ class StartScreen(QWidget):
         column.addWidget(self.collab)
 
         self.connect_button = QPushButton("CONNECT A SHARED FOLDER…")
+        self.connect_button.setToolTip(
+            "Choose the Google Drive folder you share with someone (the one holding the song folders)."
+        )
         self.connect_button.setCursor(Qt.PointingHandCursor)
         self.connect_button.clicked.connect(self.connect_requested.emit)
         column.addWidget(self.connect_button)
@@ -85,6 +89,7 @@ class StartScreen(QWidget):
         column.addWidget(self.recent)
 
         self.open_button = QPushButton("OPEN PROJECT…")
+        self.open_button.setToolTip("Open your copy of a song that is already set up on this computer.")
         self.open_button.setMinimumHeight(44)
         self.open_button.setCursor(Qt.PointingHandCursor)
         self.open_button.setProperty("primary", True)
@@ -133,7 +138,9 @@ class StartScreen(QWidget):
                 item.setData(Qt.UserRole, (hub, row.song.name))
                 item.setSizeHint(QSize(0, ROW_HEIGHT))
                 self.collab.addItem(item)
-                self.collab.setItemWidget(item, _SongRow(row))
+                self.collab.setItemWidget(
+                    item, _SongRow(row, lambda h=hub, n=row.song.name: self.live_requested.emit(h, n))
+                )
                 rows += 1
             if not songs:
                 note = QListWidgetItem()
@@ -168,6 +175,7 @@ class _HubHeader(QWidget):
         name.setObjectName("recentName")
         row.addWidget(name, 1)
         share = QPushButton("Add a project…")
+        share.setToolTip(f"Share a song from this computer with {hub.name}.")
         share.setCursor(Qt.PointingHandCursor)
         share.setFixedHeight(34)
         share.setStyleSheet("padding: 2px 14px; font-size: 11px;")
@@ -179,12 +187,29 @@ class _HubHeader(QWidget):
 class _SongRow(QWidget):
     """Song name, who did what last, and whether this Mac is behind."""
 
-    def __init__(self, row: "hubsync.SongRow"):
+    def __init__(self, row: "hubsync.SongRow", on_live=None):
         super().__init__()
         self.setFixedHeight(ROW_HEIGHT)
-        column = QVBoxLayout(self)
+        self.setToolTip(
+            "Click to see this song: where you stand, who is working, what changed."
+        )
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        holder = QWidget()
+        outer.addWidget(holder, 1)
+        column = QVBoxLayout(holder)
         column.setContentsMargins(14, 5, 4, 5)
         column.setSpacing(1)
+        if on_live is not None:
+            live = QPushButton("Open in Live")
+            live.setCursor(Qt.PointingHandCursor)
+            live.setFixedHeight(30)
+            live.setStyleSheet("padding: 2px 12px; font-size: 11px;")
+            live.setToolTip(
+                "Opens YOUR copy of the song in Live (getting it first if you don't have one)."
+            )
+            live.clicked.connect(on_live)
+            outer.addWidget(live)
 
         top = QHBoxLayout()
         name = QLabel(row.song.name)

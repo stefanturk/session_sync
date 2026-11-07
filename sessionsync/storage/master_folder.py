@@ -1,9 +1,21 @@
-"""The shared copy: an ordinary Ableton project folder with bookkeeping inside.
+"""The shared copy: a song folder in Drive that nobody opens by mistake.
 
-The project files sit in the folder exactly as Live wants them, so the shared
-copy opens in Live and looks like any project in Google Drive. A hidden
-`.sessionsync/` folder holds the numbered manifests, the old content of files
-that were overwritten (the history, deltas only), presence and a staging area.
+    <Song>/
+      ▶ Open in Live.webloc                    opens YOUR copy (see core/launcher.py)
+      Read me.txt
+      Song data — managed by Session Sync/     the project files
+        <Song>.als-shared                      Live Sets, renamed so Live will not open them
+        Samples/…
+      .sessionsync/                            manifests, history, presence, staging
+
+Opening and saving the shared copy in Live is how one person's edit silently
+missed everyone else (it happened: the app watched the working copy while Live
+saved into Drive). So the shared files sit one folder down and their Live Sets
+carry an extension Live does not open. Manifests keep the real names; only
+`_visible` knows about the disguise.
+
+Format 1 copies (project files at the top, plain `.als`) are still read, and
+`migrate` turns them into format 2 under the commit lock.
 
 Nothing a revision used is ever thrown away:
 
@@ -31,6 +43,7 @@ import shutil
 import time
 from pathlib import Path
 
+from sessionsync.core import launcher
 from sessionsync.core.hashing import hash_file
 from sessionsync.core.manifest import FileEntry, Manifest
 from sessionsync.storage.base import NotReadyError, StorageError, VersionAlreadyExistsError
@@ -43,6 +56,16 @@ HISTORY_DIR = "history"
 PRESENCE_DIR = "presence"
 STAGING_DIR = "staging"
 LOCK_FILE = "commit.lock"
+RESCUED_DIR = "rescued"
+TRASH_DIR = "trash"
+MIGRATING_FILE = "migrating"
+
+#: Where the project files live inside the song folder (format 2).
+DATA_DIR = "Song data — managed by Session Sync"
+#: What a Live Set is called in the shared copy, so double-clicking it does nothing harmful.
+SHARED_SET_SUFFIX = ".als-shared"
+#: The layout this code writes. 1 = project files at the top of the song folder.
+LAYOUT = 2
 
 # A push that has been silent this long has certainly died.
 STALE_COMMIT_SECONDS = 10 * 60
@@ -56,6 +79,8 @@ class MasterFolderStorage:
         self.root = Path(root)
         self._index_cache: tuple[int, dict[str, list[str]]] | None = None
         self._all_index_cache: tuple[int, dict[str, list[tuple[str, int]]]] | None = None
+        self._layout_cache: tuple[float, int] | None = None
+        self._edit_hashes: dict[str, tuple[float, int, str]] = {}
 
     # --- locations -----------------------------------------------------
 
@@ -75,11 +100,33 @@ class MasterFolderStorage:
     def _staged_path(self, sha256: str) -> Path:
         return self.meta / STAGING_DIR / sha256[:2] / sha256
 
+    def layout(self) -> int:
+        """1 or 2. A folder with no metadata yet is new, so it gets the current layout."""
+        path = self.meta / REPO_FILE
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return LAYOUT
+        if self._layout_cache and self._layout_cache[0] == mtime:
+            return self._layout_cache[1]
+        try:
+            value = int(json.loads(path.read_text(encoding="utf-8")).get("repository_format_version", 1))
+        except (OSError, ValueError, TypeError):
+            value = 1
+        self._layout_cache = (mtime, value)
+        return value
+
+    @property
+    def data_root(self) -> Path:
+        """Where the project files are: one folder down, or (format 1) the top."""
+        return self.root / DATA_DIR if self.layout() >= 2 else self.root
+
     def _visible(self, rel_path: str) -> Path:
-        target = (self.root / rel_path).resolve()
-        if self.root.resolve() not in target.parents:
+        base = self.data_root
+        target = (base / rel_path).resolve()
+        if base.resolve() not in target.parents:
             raise StorageError(f"Refusing a path outside the project: {rel_path}")
-        return self.root / rel_path
+        return base / disguise(rel_path) if base != self.root else base / rel_path
 
     def _ensure_layout(self) -> None:
         for sub in (MANIFESTS_DIR, PRESENCE_DIR):
@@ -110,6 +157,16 @@ class MasterFolderStorage:
             self.meta / REPO_FILE,
             json.dumps(metadata, indent=2, ensure_ascii=False).encode("utf-8"),
         )
+        self._layout_cache = None
+        if self.layout() >= 2:
+            self.ensure_front_door()
+
+    def ensure_front_door(self) -> None:
+        """The launcher and the read-me at the top of the song folder (format 2 only)."""
+        metadata = self.read_repo_metadata() or {}
+        if self.layout() < 2 or not metadata.get("repository_id"):
+            return
+        launcher.write_front_door(self.root, metadata["repository_id"], self.root.name)
 
     # --- objects -------------------------------------------------------
 
@@ -245,6 +302,8 @@ class MasterFolderStorage:
     def current_version(self) -> int:
         try:
             self.recover()
+            if (self.meta / MIGRATING_FILE).exists() and not self._lock_is_fresh():
+                self.migrate()  # a computer died part way through moving the files
         except StorageError:
             pass  # an unfinishable push is ignored here; publishing reports it
         return self._committed_version()
@@ -480,6 +539,206 @@ class MasterFolderStorage:
     def _write_retention(self, retention: dict) -> None:
         _write_atomic(self.meta / RETENTION_FILE, json.dumps(retention).encode("utf-8"))
 
+    # --- format 1 -> 2 ---------------------------------------------------
+
+    def needs_migration(self) -> bool:
+        return self.layout() < 2 and self.read_repo_metadata() is not None
+
+    def migrate(self) -> list[Path]:
+        """Move a format-1 shared copy into the format-2 layout. Returns rescued sets.
+
+        Every step is a rename inside the song folder, so Google Drive uploads
+        nothing again. It runs under the commit lock and can be run again after
+        a crash at any point; the format number is written last.
+
+        1. A Live Set whose bytes differ from the current version was saved in
+           Drive directly: it is moved to .sessionsync/rescued/, never lost.
+        2. Every file any version used moves into the data folder.
+        3. Anything else at the top (Live's Backup folder, crash files) goes to
+           .sessionsync/trash/.
+        """
+        if not self.needs_migration():
+            if (self.meta / MIGRATING_FILE).exists():  # cut short after the format was written
+                self.ensure_front_door()
+                (self.meta / MIGRATING_FILE).unlink(missing_ok=True)
+            return []
+        self._ensure_layout()
+        version = self._committed_version()
+        self._take_lock(version + 1)
+        try:
+            _write_atomic(self.meta / MIGRATING_FILE, b"")
+            rescued = self._rescue_from(self.root, legacy=True)
+            data = self.root / DATA_DIR
+            known = {rel for pairs in self._all_index().values() for rel, _ in pairs}
+            for version_ in self.list_versions():
+                try:
+                    rev = self._manifest(version_).revision or {}
+                except (OSError, ValueError, KeyError):
+                    continue
+                if rev.get("project_marker"):
+                    known.add(rev["project_marker"])
+            for rel in sorted(known):
+                source = self.root / rel
+                dest = data / disguise(rel)
+                if source.is_file() and not dest.exists():
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(source, dest)
+                elif source.is_dir():
+                    (data / rel).mkdir(parents=True, exist_ok=True)
+            trash = self.meta / TRASH_DIR / _stamp()
+            for item in sorted(self.root.iterdir()):
+                if item.name in (META_DIR, DATA_DIR) or launcher.is_front_door(item.name):
+                    continue
+                if item.is_dir() and not any(p.is_file() for p in item.rglob("*")):
+                    shutil.rmtree(item, ignore_errors=True)  # emptied by the moves above
+                    continue
+                trash.mkdir(parents=True, exist_ok=True)
+                os.replace(item, trash / item.name)
+            metadata = self.read_repo_metadata() or {}
+            metadata["repository_format_version"] = LAYOUT
+            _write_atomic(
+                self.meta / REPO_FILE,
+                json.dumps(metadata, indent=2, ensure_ascii=False).encode("utf-8"),
+            )
+            self._layout_cache = None
+            self._index_cache = self._all_index_cache = None
+            self.ensure_front_door()
+            (self.meta / MIGRATING_FILE).unlink(missing_ok=True)
+            return rescued
+        finally:
+            self._release_lock()
+
+    # --- edits made straight in Drive -------------------------------------
+
+    def drive_edits(self) -> list[str]:
+        """Live Sets in the shared copy that nobody pushed: saved in Drive directly.
+
+        Paths relative to the song folder. Cheap: only Live Sets are looked at,
+        and each is hashed again only when its size or time changes.
+        """
+        version = self._committed_version()
+        if not version:
+            return []
+        expected = self._expected_sets(version)
+        found = []
+        data = self.data_root
+        if not data.is_dir():
+            return []
+        legacy = data == self.root
+        for path in sorted(data.rglob("*")):
+            parts = path.relative_to(self.root).parts
+            if not path.is_file() or META_DIR in parts or (legacy and parts[0] == DATA_DIR):
+                continue
+            name = path.name.lower()
+            if not (name.endswith(".als") or name.endswith(SHARED_SET_SUFFIX)):
+                continue
+            rel = undisguise(path.relative_to(data).as_posix())
+            if _in_backup(rel):
+                continue  # Live's own safety copies: tidied away by rescue, not news
+            want = expected.get(rel)
+            if want is None:
+                found.append(path.relative_to(self.root).as_posix())
+            elif self._quick_hash(path) not in want:
+                found.append(path.relative_to(self.root).as_posix())
+        return found
+
+    def _expected_sets(self, version: int) -> dict[str, set[str]]:
+        """{set path: acceptable hashes}. Past Revisions are fixed; current sets are current."""
+        expected: dict[str, set[str]] = {}
+        for number in self.list_versions():
+            try:
+                manifest = self._manifest(number)
+            except (OSError, ValueError, KeyError):
+                continue
+            if manifest.revision:
+                expected.setdefault(manifest.revision["path"], set()).add(manifest.revision["sha256"])
+            if number == version:
+                for rel, entry in manifest.files.items():
+                    if rel.lower().endswith(".als"):
+                        expected[rel] = {entry.sha256}
+        for rel in list(expected):
+            if not rel.lower().endswith(".als"):
+                expected.pop(rel)
+        # A set an earlier version had, that the current one dropped, still sits in place.
+        older: dict[str, set[str]] = {}
+        for sha, pairs in self._all_index().items():
+            for rel, _ in pairs:
+                if rel.lower().endswith(".als") and rel not in expected:
+                    older.setdefault(rel, set()).add(sha)
+        expected.update(older)
+        return expected
+
+    def _quick_hash(self, path: Path) -> str:
+        stat = path.stat()
+        key = str(path)
+        cached = self._edit_hashes.get(key)
+        if cached and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
+            return cached[2]
+        digest = hash_file(path)
+        self._edit_hashes[key] = (stat.st_mtime, stat.st_size, digest)
+        return digest
+
+    def rescue_drive_edits(self, *, local_copies: dict[str, Path] | None = None) -> list[Path]:
+        """Move sets saved straight into Drive out of the way, and put the real ones back.
+
+        Returns where the rescued sets now are (inside .sessionsync/rescued/), so
+        the caller can bring them into the person's own copy. `local_copies`
+        ({set path: file on this computer}) supplies the real set when Drive's
+        only copy was the one that got overwritten. A second computer running
+        this a moment later finds nothing left to do.
+        """
+        version = self._committed_version()
+        self._take_lock(version + 1)
+        try:
+            rescued = self._rescue_from(self.data_root, legacy=self.layout() < 2)
+            self._restore_sets(version, local_copies or {})
+            backup = self.data_root / "Backup"
+            if backup.is_dir():
+                trash = self.meta / TRASH_DIR / _stamp()
+                trash.mkdir(parents=True, exist_ok=True)
+                os.replace(backup, trash / "Backup")
+            self._edit_hashes.clear()
+            return rescued
+        finally:
+            self._release_lock()
+
+    def _rescue_from(self, base: Path, *, legacy: bool) -> list[Path]:
+        edits = self.drive_edits()
+        if not edits:
+            return []
+        dest_root = self.meta / RESCUED_DIR / _stamp()
+        moved = []
+        for rel in edits:
+            source = self.root / rel
+            if not source.exists():
+                continue
+            # keep the real name, so it opens in Live once it is on someone's computer
+            inner = undisguise(source.relative_to(base).as_posix()) if base in source.parents else source.name
+            dest = dest_root / inner
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(source, dest)
+            moved.append(dest)
+        return moved
+
+    def _restore_sets(self, version: int, local_copies: dict[str, Path]) -> None:
+        if not version:
+            return
+        manifest = self._manifest(version)
+        for rel, entry in manifest.files.items():
+            if not rel.lower().endswith(".als"):
+                continue
+            dest = self._visible(rel)
+            if dest.exists() and self._quick_hash(dest) == entry.sha256:
+                continue
+            local = local_copies.get(rel)
+            if local is not None and local.exists() and hash_file(local) == entry.sha256:
+                _copy_verified(local, dest, entry.sha256)
+                continue
+            try:
+                self._place(entry, dest, {})
+            except StorageError:
+                pass  # nobody has it right now; the next push from anyone puts it back
+
     # --- presence ------------------------------------------------------
 
     def write_session(self, key: str, data: dict) -> None:
@@ -500,6 +759,25 @@ class MasterFolderStorage:
 
     def delete_session(self, key: str) -> None:
         (self.meta / PRESENCE_DIR / f"{key}.json").unlink(missing_ok=True)
+
+
+def disguise(rel_path: str) -> str:
+    """The shared copy's name for a project file: Live Sets get the shared suffix."""
+    return rel_path + "-shared" if rel_path.lower().endswith(".als") else rel_path
+
+
+def undisguise(rel_path: str) -> str:
+    if rel_path.lower().endswith(SHARED_SET_SUFFIX):
+        return rel_path[: -len("-shared")]
+    return rel_path
+
+
+def _in_backup(rel_path: str) -> bool:
+    return any(part == "Backup" for part in Path(rel_path).parts[:-1])
+
+
+def _stamp() -> str:
+    return time.strftime("%Y-%m-%d %H.%M.%S")
 
 
 def _has_size(path: Path, size: int) -> bool:

@@ -200,17 +200,29 @@ def test_choosing_to_push_first_keeps_the_project_open(window, alice, monkeypatc
     assert pushed == [True]
 
 
-def test_closing_a_tab_ends_the_session_rather_than_leaving_a_ghost(window, alice, bob):
-    """A lingering heartbeat has collaborators believing you are still
+def test_closing_a_tab_with_live_closed_and_nothing_to_push_leaves_no_ghost(window, alice, bob):
+    """A lingering "working" has collaborators believing you are still
     recording for up to fifteen minutes."""
-    pane = window.open_project(alice.project_root)
-    pane.request_start_session.emit()
-    assert _spin_until(lambda: bob.other_sessions()), "the session never started"
+    alice.refresh_presence(live_here=True)  # Live had it open earlier
+    assert bob.other_sessions()
+    window.open_project(alice.project_root)
     _never_ask(window)
 
     window.close_tab(0)
 
     assert bob.other_sessions() == []
+
+
+def test_closing_a_tab_keeps_unpushed_work_visible_to_the_others(window, alice, bob):
+    """Closing ends nothing: the others still see that you have work to push."""
+    record(alice.project_root, "Samples/Recorded/Sax.aif", b"sax")
+    pane = window.open_project(alice.project_root)
+    pane._show(_snapshot_of(alice.project_root))
+    _answer(window, "close")
+
+    window.close_tab(0)
+
+    assert [s["state"] for s in bob.other_sessions()] == ["unpushed"]
 
 
 def test_quitting_with_unpushed_work_asks_once_for_everything(window, alice, bob):

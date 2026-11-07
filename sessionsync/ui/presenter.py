@@ -24,7 +24,14 @@ class Banner:
 class Button:
     label: str
     enabled: bool
-    reason: str = ""  # shown as a tooltip when disabled — never leave a user guessing
+    reason: str = ""  # why it is greyed out — never leave a user guessing
+    hint: str = ""    # what it does, shown on hover whether or not it can be clicked
+
+    @property
+    def tooltip(self) -> str:
+        if self.enabled or not self.reason:
+            return self.hint
+        return f"{self.reason}\n\n{self.hint}" if self.hint else self.reason
 
 
 @dataclass
@@ -33,10 +40,12 @@ class Screen:
     version_line: str
     banner: Banner
     presence: str
+    open: Button
     pull: Button
-    start: Button
     review: Button
     push: Button
+    #: shown only when someone saved the song straight into Drive
+    rescue: Button | None = None
     changes: list[tuple[str, str, str]] = field(default_factory=list)
     summary: str = ""
     last_push: str = ""
@@ -44,75 +53,142 @@ class Screen:
     primary: str = ""
     #: short uppercase status for the header, next to the indicator light.
     state_label: str = ""
+    #: a quiet line above the change list ("Only saved work counts…")
+    changes_hint: str = ""
+    #: hover text for the header's light and state
+    state_hint: str = ""
 
 
 PULL_FIRST = "Pull the latest first."
+
+HINTS = {
+    "open": "Opens YOUR copy of the song in Live — the one on this computer. "
+            "Never open the files inside Google Drive.",
+    "pull": "Brings in the newest version from the shared folder. Anything you "
+            "changed and did not push is never replaced without asking.",
+    "review": "Every file, and every track, that changed since the version you are on.",
+    "push": "Saves your work as a new version for everyone: only the files the song "
+            "uses are sent, and the set is kept in Past Revisions.",
+    "rescue": "Brings the save made inside Google Drive into your own copy, and puts "
+              "the shared copy back the way it was pushed. Nothing is thrown away.",
+}
+
+CHANGE_HINTS = {
+    "Added": "New since the version you are on — Push sends it.",
+    "Modified": "Changed since the version you are on — Push sends the new version.",
+    "Removed": "Gone from your copy. The shared copy keeps it for older revisions.",
+}
 
 
 def screen(
     status: Status,
     *,
     project_name: str,
-    session_open: bool = False,
+    session_open: bool = False,  # kept for older callers; working is automatic now
     last_push: dict | None = None,
+    live_open: bool = False,
+    live_on_drive: bool = False,
+    set_summary: str = "",
 ) -> Screen:
     behind = status.versions_behind
     changed = status.has_local_changes
+    edits = list(getattr(status, "drive_edits", []) or [])
+    live_open = live_open or session_open
 
     return Screen(
         title=project_name,
         version_line=(
             f"Latest version: v{status.remote_version}      You have: v{status.local_version}"
         ),
-        banner=_banner(status.state, behind),
+        banner=_banner(status.state, behind, live_open=live_open, live_on_drive=live_on_drive,
+                       edits=bool(edits)),
         presence=describe_sessions(status.active_sessions),
+        open=Button("Open in Live", enabled=True, hint=HINTS["open"]),
         pull=Button(
             "Catch Up" if status.state == "push_blocked" else "Pull",
             enabled=behind > 0,
             reason="" if behind else "You have the latest version — nothing new to pull.",
+            hint=HINTS["pull"],
         ),
-        start=_session_button(session_open, behind),
         review=Button(
             "Review Changes",
             enabled=changed,
-            reason="" if changed else "Nothing has changed since your last push.",
+            reason="" if changed else "Nothing has changed since the version you are on.",
+            hint=HINTS["review"],
         ),
-        push=_push_button(changed, behind),
-        changes=_changes(status),
+        push=_push_button(changed, behind, edits=bool(edits)),
+        rescue=Button("Rescue Edits", enabled=True, hint=HINTS["rescue"]) if edits else None,
+        changes=_changes(status, set_summary),
         summary=_summary(status),
         last_push=_last_push(last_push),
-        primary=_primary(status.state, session_open),
-        state_label=_state_label(status.state, behind, session_open),
+        primary=_primary(status.state, edits=bool(edits)),
+        state_label=_state_label(status.state, behind, live_open=live_open, edits=bool(edits)),
+        changes_hint=(
+            "Only saved work counts — press ⌘S in Live before you push."
+            if live_open else ""
+        ),
+        state_hint=_state_hint(status.state, behind),
     )
 
 
-def _state_label(state: str, behind: int, session_open: bool) -> str:
+def _state_label(state: str, behind: int, *, live_open: bool = False, edits: bool = False) -> str:
     """Two or three words for the header. Being behind outranks everything."""
+    if edits:
+        return "RESCUE NEEDED"
     if state == "behind":
         return f"{behind} VERSION{'S' if behind != 1 else ''} BEHIND"
     if state == "push_blocked":
         return "CATCH UP"
     if state == "local_changes":
         return "NOT PUSHED"
-    return "SESSION OPEN" if session_open else "UP TO DATE"
+    return "OPEN IN LIVE" if live_open else "UP TO DATE"
 
 
-def _primary(state: str, session_open: bool) -> str:
+def _state_hint(state: str, behind: int) -> str:
+    if state in ("behind", "push_blocked"):
+        return f"Someone pushed {behind} newer version{'s' if behind != 1 else ''} since yours."
+    if state == "local_changes":
+        return "Your copy has saved changes nobody else has yet. Push to share them."
+    return "Your copy matches the newest version in the shared folder."
+
+
+def _primary(state: str, *, edits: bool = False) -> str:
     """The single next thing to do. Catching up always comes before publishing."""
+    if edits:
+        return "rescue"
     if state in ("behind", "push_blocked"):
         return "pull"
     if state == "local_changes":
         return "push"
-    if not session_open:
-        return "start"
-    return ""
+    return "open"
 
 
-def _banner(state: str, behind: int) -> Banner:
+def _banner(state: str, behind: int, *, live_open: bool = False, live_on_drive: bool = False,
+            edits: bool = False) -> Banner:
     versions = f"{behind} version{'s' if behind != 1 else ''}"
+    if live_on_drive:
+        return Banner(
+            "Live has the SHARED copy in Google Drive open. Close it in Live without "
+            "saving, then use Open in Live — that opens your own copy.",
+            "danger",
+        )
+    if edits:
+        return Banner(
+            "Someone saved this song directly inside the shared folder in Google Drive. "
+            "Rescue Edits brings that save into your copy — nothing is lost.",
+            "danger",
+        )
+    if state == "behind" and live_open:
+        return Banner(
+            f"Live has this song open, but you are {versions} behind. Don't save — close "
+            "it in Live, Pull, then open it again.",
+            "danger",
+        )
     if state == "behind":
         return Banner(
-            f"You are {versions} behind — someone pushed while you were away. Pull the latest before you start.", "warning"
+            f"You are {versions} behind — someone pushed while you were away. Pull the "
+            "latest before you start.",
+            "warning",
         )
     if state == "push_blocked":
         return Banner(
@@ -122,36 +198,40 @@ def _banner(state: str, behind: int) -> Banner:
         )
     if state == "local_changes":
         return Banner("You have work that has not been pushed yet.", "info")
+    if live_open:
+        return Banner("Up to date — the song is open in Live.", "ok")
     return Banner("Up to date.", "ok")
 
 
-def _session_button(session_open: bool, behind: int) -> Button:
-    if session_open:
-        return Button("Done Working", enabled=True)
-    return Button(
-        "Start Working",
-        enabled=behind == 0,
-        reason="" if behind == 0 else f"This project has moved on. {PULL_FIRST}",
-    )
-
-
-def _push_button(changed: bool, behind: int) -> Button:
+def _push_button(changed: bool, behind: int, *, edits: bool = False) -> Button:
+    if edits:
+        return Button("Push", enabled=False, reason="Rescue the edit made in Drive first.",
+                      hint=HINTS["push"])
     if behind:
-        return Button("Push", enabled=False, reason=f"Someone pushed first. {PULL_FIRST}")
+        return Button("Push", enabled=False, reason=f"Someone pushed first. {PULL_FIRST}",
+                      hint=HINTS["push"])
     return Button(
         "Push",
         enabled=changed,
-        reason="" if changed else "Nothing has changed since your last push.",
+        reason="" if changed else "Nothing has changed since the version you are on.",
+        hint=HINTS["push"],
     )
 
 
-def _changes(status: Status) -> list[tuple[str, str, str]]:
+def _changes(status: Status, set_summary: str = "") -> list[tuple[str, str, str]]:
     diff = status.diff
+
+    def label(path: str) -> str:
+        # "My Song.als — Changed Main, Drums": say what changed inside the set
+        if set_summary and path.lower().endswith(".als") and "/" not in path:
+            return f"{path}  —  {set_summary}"
+        return path
+
     rows = []
     for path in diff.added:
-        rows.append(("Added", path, human_size(diff.sizes.get(path, 0))))
+        rows.append(("Added", label(path), human_size(diff.sizes.get(path, 0))))
     for path in diff.modified:
-        rows.append(("Modified", path, human_size(diff.sizes.get(path, 0))))
+        rows.append(("Modified", label(path), human_size(diff.sizes.get(path, 0))))
     for path in diff.deleted:
         rows.append(("Removed", path, ""))
     return rows

@@ -18,6 +18,7 @@ from pathlib import Path
 
 from sessionsync.adapters.ableton.adapter import AbletonAdapter
 from sessionsync.core import master
+from sessionsync.core.locations import free_folder
 from sessionsync.core.repository import Repository
 from sessionsync.core.summary import describe_version
 from sessionsync.core.manifest import Manifest
@@ -91,7 +92,8 @@ class Hub:
         return next((s for s in self.songs() if s.name == name), None)
 
     def local_path(self, song_name: str, local_base: Path) -> Path:
-        return Path(local_base) / self.name / song_name
+        """Straight in the chosen folder (the Desktop by default), named after the song."""
+        return Path(local_base) / song_name
 
     def storage_for(self, song_name: str) -> MasterFolderStorage:
         return MasterFolderStorage(self.path / song_name)
@@ -116,7 +118,7 @@ class Hub:
         if song.kind == "ready":
             master.adopt(song.path, author=author)
         return master.get_workbench(
-            song.path, destination or self.local_path(song_name, local_base), author=author
+            song.path, destination or free_folder(local_base, song_name), author=author
         )
 
 

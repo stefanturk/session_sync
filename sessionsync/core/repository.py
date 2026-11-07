@@ -25,7 +25,9 @@ from pathlib import Path
 from sessionsync.adapters import get_adapter
 from sessionsync.adapters.base import DAWAdapter
 from sessionsync.core.errors import (
+    DriveEditsError,
     LocalChangesWouldBeReplacedError,
+    NewerFormatError,
     NothingToPushError,
     NotAProjectError,
     ProjectBehindError,
@@ -42,7 +44,7 @@ from sessionsync.core.manifest import (
 )
 from sessionsync.storage.base import NotReadyError, StorageProvider, VersionAlreadyExistsError
 
-REPOSITORY_FORMAT_VERSION = 1
+REPOSITORY_FORMAT_VERSION = 2
 
 
 @dataclass
@@ -73,6 +75,8 @@ class Status:
     active_sessions: list = field(default_factory=list)
     #: Consolidate's view: unused, outside, missing files (None for other DAWs)
     plan: object | None = None
+    #: Live Sets someone saved straight into the shared copy in Drive
+    drive_edits: list = field(default_factory=list)
 
     @property
     def versions_behind(self) -> int:
@@ -287,16 +291,12 @@ class Repository:
         return self.read_manifest(self.base_version).files
 
     def review(self) -> ManifestDiff:
-        """What has changed locally since this session started (or the last sync)."""
-        baseline = self.state.baseline
-        if baseline is not None:
-            before = {
-                path: FileEntry(path=path, sha256=info["sha256"], size=info["size"])
-                for path, info in baseline.items()
-            }
-        else:
-            before = self.base_files()
-        return diff_file_maps(before, self.scan())
+        """What has changed here since the version this copy is on.
+
+        Always against that version, never against "when you pressed start":
+        work done before the app was looking is still work to push.
+        """
+        return diff_file_maps(self.base_files(), self.scan())
 
     def status(self) -> Status:
         from sessionsync.core.session import active_sessions
@@ -329,6 +329,7 @@ class Repository:
             already_stored_bytes=project_bytes - upload_bytes,
             active_sessions=active_sessions(self.storage, exclude=self._session_key()),
             plan=self.last_plan,
+            drive_edits=self.drive_edits(),
         )
 
     def history(self) -> list[VersionSummary]:
@@ -410,7 +411,6 @@ class Repository:
         self._end_session_marker()  # an automatic note of ours gives way to the real session
         session = build_session(self.author, self.base_version, new_session_key(self.author))
         self.state.session = session
-        self.state.baseline = {p: e.to_dict() for p, e in self.scan().items()}
         self.storage.write_session(session["key"], session)
         return session
 
@@ -435,8 +435,8 @@ class Repository:
         from sessionsync.core.session import build_session, new_session_key
 
         existing = self.state.session
-        if existing and not existing.get("auto"):
-            self.heartbeat()  # a session started by hand keeps its own note
+        if existing and not existing.get("auto") and live_here:
+            self.heartbeat()  # a session started by hand (CLI) keeps its own note while Live is open
             return existing.get("state")
         diff = diff_file_maps(self.base_files(), self.scan())
         if not live_here and not diff.has_changes:
@@ -463,6 +463,19 @@ class Repository:
         self.storage.write_session(session["key"], session)
         return session["state"]
 
+    def set_summary(self, diff: ManifestDiff) -> str:
+        """What changed inside the main Live Set, track by track ("Changed Main, Drums")."""
+        touched = [p for p in diff.modified + diff.added if p.lower().endswith(".als")]
+        if not touched:
+            return ""
+        text = summarise(diff_file_maps({}, {}), self._base_tracks(), self._track_fingerprints())
+        return "" if text == "No changes" else text
+
+    def changes_fingerprint(self, diff: ManifestDiff) -> str:
+        """Short id of a set of unpushed changes, to notice ones made while the app was closed."""
+        text = "|".join(sorted(diff.added) + ["~"] + sorted(diff.modified) + ["-"] + sorted(diff.deleted))
+        return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+
     def _base_tracks(self):
         if self.base_version == 0:
             return None
@@ -470,7 +483,6 @@ class Repository:
 
     def end_session(self) -> None:
         self._end_session_marker()
-        self.state.baseline = None
 
     def other_sessions(self) -> list[dict]:
         from sessionsync.core.session import active_sessions
@@ -480,9 +492,16 @@ class Repository:
     # --- the two operations that matter --------------------------------
 
     def push(self, note: str | None = None) -> PushResult:
+        self.check_format()
         remote_version = self.remote_version()
         if remote_version != self.base_version:
             raise StalePushError(self.base_version, remote_version)
+        edits = self.drive_edits()
+        if edits:
+            raise DriveEditsError(edits)
+        migrate = getattr(self.storage, "migrate", None)
+        if migrate is not None:
+            migrate()  # an older shared copy gets the layout Live cannot open by mistake
 
         # Consolidate first: what the Sets use, outside files copied in, and the
         # Sets re-pointed where needed. Any reason it is unsafe stops the push here,
@@ -565,7 +584,6 @@ class Repository:
             raise StalePushError(self.base_version, self.remote_version()) from None
 
         self.state.base_version = new_version
-        self.state.baseline = None
         self.state.last_push = {
             "version": new_version,
             "at": _now(),
@@ -579,6 +597,7 @@ class Repository:
         return PushResult(new_version, diff, uploaded_objects, uploaded_bytes)
 
     def pull(self, *, replace_my_versions: bool = False) -> PullResult:
+        self.check_format()
         target_version = self.remote_version()
         from_version = self.base_version
         if target_version == 0 or target_version == from_version:
@@ -615,7 +634,13 @@ class Repository:
                 if path not in diff.added and path not in diff.modified:
                     continue  # locally edited, and this version does not change it
                 self._to_trash(local, trash)
-            self.storage.download_object(entry.sha256, local)
+            try:
+                self.storage.download_object(entry.sha256, local)
+            except NotReadyError:
+                edits = self.drive_edits()
+                if edits:
+                    raise DriveEditsError(edits) from None
+                raise
             downloaded += entry.size
 
         # Files the new version no longer uses stay on this computer: an older
@@ -623,7 +648,6 @@ class Repository:
         downloaded += self._fetch_past_revisions()
 
         self.state.base_version = target_version
-        self.state.baseline = None
         return PullResult(from_version, target_version, diff, downloaded)
 
     def _fetch_past_revisions(self) -> int:
@@ -737,6 +761,77 @@ class Repository:
             mine=_track_changes(base_tracks, mine_tracks),
         )
 
+    # --- the shared copy itself ----------------------------------------
+
+    def check_format(self) -> None:
+        """Refuse to touch a shared copy laid out by a newer Session Sync."""
+        metadata = self.storage.read_repo_metadata() or {}
+        found = int(metadata.get("repository_format_version", 1) or 1)
+        if found > REPOSITORY_FORMAT_VERSION:
+            raise NewerFormatError(found, REPOSITORY_FORMAT_VERSION)
+
+    def drive_edits(self) -> list[str]:
+        """Live Sets someone saved straight into the shared copy (relative to it)."""
+        finder = getattr(self.storage, "drive_edits", None)
+        if finder is None:
+            return []
+        try:
+            return finder()
+        except OSError:
+            return []  # Drive half-synced: look again next time
+
+    def rescue_drive_edits(self) -> list["Rescued"]:
+        """Bring sets saved straight into Drive into this copy, and put Drive right.
+
+        The saved set lands where it can be pushed, and nothing here is
+        overwritten unless it is exactly the version Drive already has:
+
+        - this copy is current and its set is unchanged -> the rescued set
+          replaces it (the old one goes to the trash folder; Drive has it too);
+        - otherwise -> it is put beside the set as "<Song> (edited in Drive …).als"
+          for you to open and compare.
+        """
+        self.check_format()
+        rescue = getattr(self.storage, "rescue_drive_edits", None)
+        if rescue is None:
+            return []
+        current = self.read_manifest(self.base_version).files if self.base_version else {}
+        local_sets = {
+            rel: self.project_root / rel for rel in current if rel.lower().endswith(".als")
+        }
+        moved = rescue(local_copies=local_sets)
+        behind = self.remote_version() != self.base_version
+        trash = None
+        out = []
+        for source in moved:
+            rel = _rescued_relative(source)
+            entry = current.get(rel)
+            target = self.project_root / rel
+            unchanged = (
+                entry is not None
+                and target.exists()
+                and entry.matches(self.hash_cache.hash_file(target))
+            )
+            if unchanged and not behind:
+                trash = trash or self._new_trash_folder()
+                self._to_trash(target, trash)
+                shutil.copy2(source, target)
+                out.append(Rescued(target, replaced=True))
+                continue
+            when = datetime.fromtimestamp(source.stat().st_mtime).strftime("%-d %b %H.%M")
+            side = _free_name(self.project_root / f"{Path(rel).stem} (edited in Drive, {when}).als")
+            shutil.copy2(source, side)
+            out.append(Rescued(side, replaced=False))
+        return out
+
+    def open_target(self) -> Path:
+        """The Live Set to open: the main set of this copy."""
+        info = self.adapter.inspect_project(self.project_root)
+        primary = getattr(info, "primary_set", None)
+        if primary is None:
+            raise NotAProjectError(f"There is no Live Set in {self.project_root.name}.")
+        return Path(primary)
+
     # --- local safety ---------------------------------------------------
 
     def changes_a_pull_would_replace(self, target: Manifest) -> list[str]:
@@ -778,6 +873,19 @@ class Repository:
         if session:
             self.storage.delete_session(session["key"])
             self.state.session = None
+
+
+@dataclass
+class Rescued:
+    path: Path      # where the rescued set now is, in this copy
+    replaced: bool  # True: it became the song's set; False: it sits beside it
+
+
+def _rescued_relative(source: Path) -> str:
+    """'…/.sessionsync/rescued/<stamp>/Sub/Song.als' -> 'Sub/Song.als'."""
+    parts = source.parts
+    i = parts.index("rescued")
+    return Path(*parts[i + 2:]).as_posix()
 
 
 @dataclass

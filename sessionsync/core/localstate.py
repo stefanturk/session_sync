@@ -116,6 +116,15 @@ class LocalState:
         self._set("session", value)
 
     @property
+    def seen_changes(self) -> str | None:
+        """Fingerprint of the unpushed changes the app last showed, to spot ones made while it was closed."""
+        return self._get("seen_changes")
+
+    @seen_changes.setter
+    def seen_changes(self, value: str | None) -> None:
+        self._set("seen_changes", value)
+
+    @property
     def last_push(self) -> dict | None:
         return self._get("last_push")
 

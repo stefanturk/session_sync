@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import QApplication, QInputDialog
 
 from sessionsync.auth.identity import IdentityNotSetError, load_identity, save_identity
@@ -20,14 +20,52 @@ def project_argument(argv: list[str]) -> Path | None:
     number, which must not be mistaken for a path.
     """
     for arg in argv:
-        if not arg.startswith("-"):
+        if not arg.startswith("-") and not arg.startswith("sessionsync:"):
             return Path(arg).expanduser()
     return None
 
 
+class SessionSyncApp(QApplication):
+    """Catches the "▶ Open in Live" links in shared folders (sessionsync://…).
+
+    macOS delivers a link as a FileOpen event — at launch, before the window
+    exists, if that click is what started the app — so links are held until
+    the window is ready to take them.
+    """
+
+    def __init__(self, args):
+        super().__init__(args)
+        self.window = None
+        self.pending: list[str] = []
+
+    def event(self, event):  # noqa: N802 - Qt naming
+        if event.type() == QEvent.FileOpen:
+            url = event.url().toString() if not event.url().isEmpty() else event.file()
+            if url.startswith("sessionsync:"):
+                self.deliver(url)
+                return True
+        return super().event(event)
+
+    def deliver(self, url: str) -> None:
+        if self.window is None:
+            self.pending.append(url)
+        else:
+            self.window.open_link(url)
+
+    def window_ready(self, window) -> None:
+        self.window = window
+        for url in self.pending:
+            window.open_link(url)
+        self.pending.clear()
+
+
+def link_argument(argv: list[str]) -> str | None:
+    return next((a for a in argv if a.startswith("sessionsync:")), None)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(argv if argv is not None else sys.argv[1:])
-    app = QApplication([sys.argv[0] if sys.argv else "sessionsync"])
+    app = SessionSyncApp([sys.argv[0] if sys.argv else "sessionsync"])
     app.setApplicationName("SessionSync")
     app.setApplicationDisplayName("SessionSync")
     # The window is dark whatever the system is set to, so ask for the dark
@@ -43,6 +81,11 @@ def main(argv: list[str] | None = None) -> int:
     window = MainWindow(Settings())
     window.show()
     window.start_hub_watch()
+
+    link = link_argument(argv)  # Windows passes the link on the command line
+    if link:
+        app.deliver(link)
+    app.window_ready(window)
 
     # The start screen is the front door; a path on the command line skips it.
     project = project_argument(argv)

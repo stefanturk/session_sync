@@ -37,6 +37,8 @@ sessionsync song join Sam "Song B"                   # download one of theirs
 sessionsync hub news                                 # what changed since you looked
 sessionsync history                                  # each version, in plain words
 sessionsync push --dry-run                           # what Push would send and leave behind
+sessionsync open                                     # open YOUR copy in Live
+sessionsync rescue                                   # someone saved the song inside Drive: bring it home
 sessionsync open-rev 7                               # open revision 7 in Live
 sessionsync restore 7 --to "~/Desktop/My Song v7"    # an old version, in a new folder
 ```
@@ -121,9 +123,30 @@ asserts the current version never names a missing file) and `test_pull_safety.py
 
 ## Shared copy and your own copy (Pull / Push)
 
-The shared copy in a Drive folder is an ordinary Ableton project, plus a hidden `.sessionsync/` folder.
-Nobody works in it. Each person **pulls** their own working copy anywhere on their Mac, works there, and
-**pushes** when done.
+Each song folder in Drive looks like this, so nobody can open the shared copy in Live by mistake:
+
+```
+Sam Stefan Song Sketches/
+  ▶ Open in Live.webloc                       double-click: opens YOUR copy (getting it first)
+  Read me.txt
+  Song data — managed by Session Sync/        the project; its Live Sets end in .als-shared
+  .sessionsync/                               versions, history, who is working
+```
+
+Your own copy goes on your **Desktop** (`~/Desktop/<Song>/`) unless you choose another folder in
+Settings. It must be on this computer only: synced folders (Drive, Dropbox, OneDrive, iCloud Drive)
+are refused, and a Desktop that iCloud syncs is avoided. You work there; **Push** sends your saved
+work, **Pull** brings in everyone else's. There is no "start working" button: when Live has your
+copy open you show as working, and while you have unpushed changes the others see that too —
+closing the app does not hide them.
+
+If someone does save the song inside Drive (an older app, or a renamed file), the app says so and
+**Rescue Edits** brings that save into your copy — beside your set if you have changes of your own —
+and puts the shared copy back the way it was pushed. Nothing is deleted.
+
+**Upgrading:** the first Push with this version moves an older shared copy into the new layout (renames
+only — Drive uploads nothing again). Update Session Sync on every collaborator's Mac before that first
+Push: the old app does not know the new layout.
 
 Every Push first runs **Consolidate**, Session Sync's own Collect All and Save, so nobody has to:
 
@@ -137,7 +160,7 @@ Every Push first runs **Consolidate**, Session Sync's own Collect All and Save, 
 - The main Set is saved as `Past Revisions/Rev 0007 - <date> - <who> - <note>.als`.
 
 Nothing a revision used is ever deleted from the shared copy. A sample that Rev 8 stops using stays where
-Rev 7 had it, so every Past Revision opens straight from the shared folder. Pull brings down what the
+Rev 7 had it, so every Past Revision can be rebuilt. Pull brings down what the
 current revision uses, plus the small Past Revisions Sets. **Open in Live** (History) or `open-rev N`
 fetches whatever an old revision needs first.
 

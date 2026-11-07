@@ -119,8 +119,9 @@ def live_warning(settings: Settings, author: dict, document: Path | None) -> New
             local = settings.song_path(hub, song.name)
             if livewatch.is_open_in(song.path, document):
                 return News(
-                    f"You opened the shared copy of {song.name} directly. Work on your own "
-                    "copy instead (Pull), or Live will change what everyone else gets.",
+                    f"Live has the shared copy of {song.name} open, inside Google Drive. "
+                    "Close it without saving, then double-click \u25b6 Open in Live — that "
+                    "opens your own copy.",
                     hub, song.name, None,
                 )
             if local.is_dir() and livewatch.is_open_in(local, document):
@@ -173,14 +174,14 @@ def _auto_pull(hub: Hub, song: str, settings: Settings, author: dict, open_roots
 
 def join(hub: Hub, song: str, settings: Settings, author: dict, destination: Path | None = None) -> Path:
     repo = hub.join_song(song, settings.local_root(), author, destination)
-    settings.set_song_path(hub, song, repo.project_root)
+    settings.set_song_path(hub, song, repo.project_root, repo.state.repository_id)
     return repo.project_root
 
 
 def share(hub: Hub, project: Path, settings: Settings, author: dict, name: str | None = None) -> Path:
     song_name = name or Path(project).name
-    hub.add_song(song_name, project, author)
-    settings.set_song_path(hub, song_name, Path(project))
+    repo = hub.add_song(song_name, project, author)
+    settings.set_song_path(hub, song_name, Path(project), repo.state.repository_id)
     _, seen = compare_scans(hub, None)
     previous = settings.seen(hub) or {}
     settings.set_seen(hub, {**previous, song_name: seen.get(song_name, 1)})

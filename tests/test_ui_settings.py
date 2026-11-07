@@ -91,7 +91,9 @@ def test_hubs_are_remembered_and_forgotten(settings, tmp_path):
     assert settings.hubs() == [] and settings.seen(hub) is None
 
 
-def test_local_root_defaults_outside_desktop_and_drive(settings, tmp_path):
-    assert settings.local_root().parts[-3:] == ("Music", "Ableton", "SessionSync")
+def test_new_songs_go_on_the_desktop_unless_icloud_syncs_it(settings, tmp_path, no_real_desktop):
+    assert settings.local_root() == no_real_desktop / "Desktop"
+    (no_real_desktop / "Library/Mobile Documents/com~apple~CloudDocs/Desktop").mkdir(parents=True)
+    assert settings.local_root() == no_real_desktop / "Music" / "Session Sync"
     settings.set_local_root(tmp_path / "mine")
     assert settings.local_root() == tmp_path / "mine"

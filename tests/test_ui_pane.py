@@ -58,8 +58,11 @@ def test_a_freshly_pushed_project_reads_as_up_to_date(pane, alice, identity):
 
     assert pane.title_label.text() == "My Song"
     assert "Up to date" in pane.banner.text()
-    assert pane.session_button.text() == "START WORKING"
+    assert pane.open_button.text() == "OPEN IN LIVE"
+    assert pane.open_button.property("primary") is True
+    assert "YOUR copy" in pane.open_button.toolTip()
     assert not pane.push_button.isEnabled()
+    assert "Nothing has changed" in pane.push_button.toolTip()
 
 
 def test_a_new_recording_appears_in_the_change_list(pane, alice, identity):
@@ -74,16 +77,47 @@ def test_a_new_recording_appears_in_the_change_list(pane, alice, identity):
     assert pane.push_button.isEnabled()
 
 
-def test_being_behind_disables_starting_a_session(pane, alice, bob, identity):
+def test_being_behind_makes_pull_the_thing_to_do(pane, alice, bob, identity):
     record(bob.project_root, "Samples/Recorded/Bass.aif", b"bass")
     bob.push(note="Bass")
 
     pane._show(snapshot_of(alice.project_root))
 
     assert "behind" in pane.banner.text()
-    assert not pane.session_button.isEnabled()
     assert pane.pull_button.isEnabled()
-    assert "Pull the latest" in pane.session_button.toolTip()
+    assert pane.pull_button.property("primary") is True
+    assert pane.open_button.isEnabled()  # it asks to Pull first, rather than refusing
+
+
+def test_changes_made_while_the_app_was_closed_are_mentioned_once(qt_app, identity, alice):
+    record(alice.project_root, "Samples/Recorded/Sax.aif", b"sax take")
+    first = snapshot_of(alice.project_root)
+    assert "while Session Sync was closed" in first.late_note
+    assert "nobody pushed" in first.late_note
+    assert snapshot_of(alice.project_root).late_note == ""  # already said
+
+
+def test_a_save_made_in_drive_shows_the_rescue_button(qt_app, identity, tmp_path):
+    from sessionsync.adapters.ableton.adapter import AbletonAdapter
+    from sessionsync.core.repository import Repository
+    from sessionsync.storage.master_folder import DATA_DIR, MasterFolderStorage
+    from tests.conftest import ALICE, als_marked, write_project
+
+    shared = MasterFolderStorage(tmp_path / "drive" / "Song")
+    repo = Repository.create(write_project(tmp_path / "me" / "Song", "Song"), shared,
+                             adapter=AbletonAdapter(), author=ALICE)
+    repo.push()
+    (shared.root / DATA_DIR / "Song.als-shared").write_bytes(als_marked("saved in drive"))
+    pane = ProjectPane(repo.project_root)
+
+    pane._show(snapshot_of(repo.project_root))
+
+    try:
+        assert not pane.rescue_button.isHidden()
+        assert not pane.push_button.isEnabled()
+        assert "Google Drive" in pane.banner.text()
+    finally:
+        pane.shutdown(end_session=False)
 
 
 def test_someone_else_working_is_shown_on_the_presence_line(pane, alice, bob, identity):

@@ -9,11 +9,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEventLoop, QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
+    QProgressDialog,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from sessionsync.auth.identity import load_identity
+from sessionsync.core import locations
 from sessionsync.core.localstate import LocalState
 from sessionsync.ui import hubsync, theme
 from sessionsync.ui.notify import Notifier
@@ -52,6 +54,21 @@ class _HubCheck(QThread):
             self.done.emit(hubsync.check_hubs(self.settings, self.author, self.open_roots))
         except Exception:  # noqa: BLE001 - the next pass tries again
             self.done.emit([])
+
+
+class _Job(QThread):
+    """Long work (copying a song out of Drive) off the UI thread, so the window
+    never looks frozen. `result` / `error` are read once `finished` fires."""
+
+    def __init__(self, work, parent: QObject | None = None):
+        super().__init__(parent)
+        self.work, self.result, self.error = work, None, None
+
+    def run(self) -> None:
+        try:
+            self.result = self.work()
+        except Exception as exc:  # noqa: BLE001 - shown by the caller
+            self.error = exc
 
 
 class MainWindow(QMainWindow):
@@ -91,6 +108,7 @@ class MainWindow(QMainWindow):
         self.start.project_chosen.connect(self.open_project)
         self.start.connect_requested.connect(self.connect_folder)
         self.start.song_chosen.connect(self.open_song)
+        self.start.live_requested.connect(lambda hub, song: self.open_song(hub, song, open_live=True))
         self.start.add_requested.connect(self.add_project)
 
         self.stack = QStackedWidget()
@@ -108,6 +126,18 @@ class MainWindow(QMainWindow):
 
         menu = self.menuBar().addMenu("&Project")
         menu.addAction(open_project)
+
+        open_live = QAction("Open in &Live", self)
+        open_live.setShortcut(QKeySequence("Ctrl+L"))
+        open_live.setToolTip("Open your own copy of this song in Live")
+        open_live.triggered.connect(lambda: self._with_current(ProjectPane.open_in_live))
+        menu.addAction(open_live)
+
+        preferences = QAction("&Settings…", self)
+        preferences.setShortcut(QKeySequence.Preferences)
+        preferences.setMenuRole(QAction.PreferencesRole)  # ⌘, in the app menu on a Mac
+        preferences.triggered.connect(self.show_settings)
+        menu.addAction(preferences)
 
         # Rebuilt every time it opens, so it never shows a folder that has gone.
         self.recent_menu = menu.addMenu("Open &Recent")
@@ -186,56 +216,232 @@ class MainWindow(QMainWindow):
             self.settings.add_hub(Path(folder))
             self.start.refresh()
 
-    def open_song(self, hub, song: str) -> None:
-        """Open your copy of a shared song, pulling it first if you do not have one."""
+    def open_song(self, hub, song: str, *, open_live: bool = False) -> None:
+        """Open your copy of a shared song, getting it first if you do not have one."""
         local = self.settings.song_path(hub, song)
         if local.is_dir() and LocalState.exists(local):
-            self.open_project(local)
+            pane = self.open_project(local)
+            if pane is not None and open_live:
+                pane.open_in_live_when_ready()
             return
 
         found = hub.song(song)
         me = self._me() or {}
         working, _ = hubsync.others_on(found, me) if found else ([], [])
         if working:
-            QMessageBox.information(
+            answer = QMessageBox.question(
                 self,
                 f"{', '.join(working)} is working on it",
                 f"{', '.join(working)} is working on {song} right now.\n\n"
-                "Call each other first so you do not both record. You can still "
-                "get a copy once they are done.",
+                "Call each other first so you do not both record over each other. "
+                "Get your copy anyway?",
+                QMessageBox.Yes | QMessageBox.Cancel,
             )
-            return
+            if answer != QMessageBox.Yes:
+                return
         if found is not None and found.kind == "ready":
             answer = QMessageBox.question(
                 self,
                 "Set up this project?",
                 f"'{song}' is a plain Ableton project in the shared folder.\n\n"
-                "I will set it up for sharing (this only adds a hidden folder inside it; "
-                "your files are not changed), then make your own copy on this Mac. "
-                "If the folder is big, this reads all of it, which can take a while.",
+                "I will set it up for sharing: its files move one folder down, into "
+                "\u201cSong data \u2014 managed by Session Sync\u201d, and a \u201c\u25b6 Open "
+                "in Live\u201d link goes at the top. Nothing is deleted. Then you get your "
+                "own copy on this computer.",
                 QMessageBox.Ok | QMessageBox.Cancel,
             )
             if answer != QMessageBox.Ok:
                 return
 
-        parent = QFileDialog.getExistingDirectory(
-            self,
-            f"Where should your copy of {song} go on this Mac?",
-            str(self.settings.local_root()),
+        destination = self._ask_where(hub, song, found)
+        if destination is None:
+            return
+        author = load_identity()
+        local = self._run_job(
+            f"Copying {song} to this computer…",
+            lambda: hubsync.join(hub, song, self.settings, author, destination),
+            "Could not get that song",
         )
-        if not parent:
+        if local is None:
             return
-        destination = Path(parent) / song
-        try:
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-            local = hubsync.join(hub, song, self.settings, load_identity(), destination)
-        except Exception as exc:  # noqa: BLE001 - shown, not raised
-            QMessageBox.warning(self, "Could not get that song", str(exc))
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
         self.start.refresh()
-        self.open_project(local)
+        pane = self.open_project(local)
+        if pane is not None and open_live:
+            pane.open_in_live_when_ready()
+
+    def _ask_where(self, hub, song: str, found) -> Path | None:
+        """Where your copy will go, said plainly, with its size and the free space."""
+        parent = self.settings.local_root()
+        size = _song_size(hub, song, found)
+        while True:
+            verdict = locations.check_location(
+                parent, hubs=[h.path for h in self.settings.hubs()],
+                songs=[p for _, p in self.settings.songs()],
+            )
+            destination = locations.free_folder(parent, song)
+            enough, free = locations.room_for(parent, size)
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Question)
+            box.setText(f"Get your own copy of {song}?")
+            lines = [
+                f"It goes to {_pretty(destination)}"
+                + (f" \u2014 {_size(size)}, you have {_size(free)} free." if size else "."),
+                "",
+                "That copy is the one you open in Live. The shared folder in Drive is "
+                "only for passing versions back and forth.",
+            ]
+            get = box.addButton("Get My Copy", QMessageBox.AcceptRole)
+            if not verdict.ok:
+                lines = [verdict.reason]
+                get.setEnabled(False)
+            elif not enough:
+                lines = [
+                    f"{song} needs {_size(size + locations.SPARE_BYTES)} (with room to record), "
+                    f"and {_pretty(parent)} has {_size(free)} free.",
+                    "Free some space, or choose a folder on another disk.",
+                ]
+                get.setEnabled(False)
+            elif verdict.warning:
+                lines += ["", verdict.warning]
+            box.setInformativeText("\n".join(lines))
+            other = box.addButton("Choose Another Folder\u2026", QMessageBox.ActionRole)
+            box.addButton("Cancel", QMessageBox.RejectRole)
+            box.setDefaultButton(get if get.isEnabled() else other)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is get:
+                return destination
+            if clicked is not other:
+                return None
+            chosen = QFileDialog.getExistingDirectory(
+                self, f"Where should your copy of {song} go?", str(parent)
+            )
+            if not chosen:
+                return None
+            parent = Path(chosen)
+
+    def _run_job(self, label: str, work, failure_title: str):
+        """Run `work` on a thread behind a progress window. Returns its result or None."""
+        progress = QProgressDialog(label, None, 0, 0, self)
+        progress.setWindowTitle(APP_NAME)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setCancelButton(None)
+        job = _Job(work, self)
+        loop = QEventLoop()
+        # Queued to this thread, so a job that finishes before exec() still ends the loop.
+        job.finished.connect(loop.quit)
+        progress.show()
+        job.start()
+        loop.exec()
+        job.wait()
+        progress.close()
+        if job.error is not None:
+            QMessageBox.warning(self, failure_title, str(job.error))
+            return None
+        return job.result
+
+    # --- "▶ Open in Live" links in the shared folder ------------------------
+
+    def open_link(self, url: str) -> bool:
+        """A `sessionsync://` link from a song folder in Drive. True if it was one."""
+        from sessionsync.core.launcher import parse_link
+
+        parsed = parse_link(url)
+        if parsed is None:
+            return False
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.open_from_link(*parsed)
+        return True
+
+    def open_from_link(self, repository_id: str, song: str) -> None:
+        local = self.settings.song_by_repo(repository_id)
+        if local is not None:
+            pane = self.open_project(local)
+            if pane is not None:
+                pane.open_in_live_when_ready()
+            return
+
+        hub, name = self._find_song(repository_id, song)
+        if hub is None:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Information)
+            box.setText(f"Connect the shared folder that has {song or 'this song'} first.")
+            box.setInformativeText(
+                "Session Sync does not know that shared folder yet. Choose the folder that "
+                "holds the song folders (for example Google Drive \u203a Song Collaboration "
+                "\u203a Sam Stefan Sketches)."
+            )
+            connect = box.addButton("Connect\u2026", QMessageBox.AcceptRole)
+            box.addButton("Cancel", QMessageBox.RejectRole)
+            box.exec()
+            if box.clickedButton() is connect:
+                self.connect_folder()
+                hub, name = self._find_song(repository_id, song)
+                if hub is not None:
+                    self.open_song(hub, name, open_live=True)
+            return
+
+        gone = self.settings.recorded_song_path(repository_id)
+        if gone is not None and not gone.exists():
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setText(f"Your copy of {name} is not at {_pretty(gone)} any more.")
+            box.setInformativeText("Did you move it? Show me where it is, or get a fresh copy.")
+            find = box.addButton("Find It\u2026", QMessageBox.AcceptRole)
+            fresh = box.addButton("Get a Fresh Copy", QMessageBox.ActionRole)
+            box.addButton("Cancel", QMessageBox.RejectRole)
+            box.exec()
+            if box.clickedButton() is find:
+                self._find_moved_copy(hub, name, repository_id)
+                return
+            if box.clickedButton() is not fresh:
+                return
+        self.open_song(hub, name, open_live=True)
+
+    def _find_moved_copy(self, hub, song: str, repository_id: str) -> None:
+        folder = QFileDialog.getExistingDirectory(self, f"Where is your copy of {song}?")
+        if not folder:
+            return
+        folder = Path(folder)
+        state_id = None
+        if LocalState.exists(folder):
+            state = LocalState.open(folder)
+            try:
+                state_id = state.repository_id
+            finally:
+                state.close()
+        if state_id != repository_id:
+            QMessageBox.warning(
+                self, "That is not it",
+                f"{folder.name} is not your copy of {song}. Choose the folder that has your "
+                "song's Live Set in it.",
+            )
+            return
+        self.settings.set_song_path(hub, song, folder, repository_id)
+        pane = self.open_project(folder)
+        if pane is not None:
+            pane.open_in_live_when_ready()
+
+    def _find_song(self, repository_id: str, song: str):
+        """(hub, song name) for a repository id, looking through every connected folder."""
+        for hub in self.settings.hubs():
+            for found in hub.songs():
+                try:
+                    meta = hub.storage_for(found.name).read_repo_metadata() or {}
+                except Exception:  # noqa: BLE001 - half-synced; keep looking
+                    continue
+                if meta.get("repository_id") == repository_id:
+                    return hub, found.name
+        return None, song
+
+    def show_settings(self) -> None:
+        from sessionsync.ui.settings_dialog import SettingsDialog
+
+        SettingsDialog(self.settings, self).exec()
+        self.start.refresh()
 
     def add_project(self, hub) -> None:
         """Put a project from this Mac into a collaborator's shared folder."""
@@ -346,9 +552,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "This is the shared copy",
-                f"'{project_root.name}' is the shared copy in the shared folder. Nobody "
-                "works in it directly.\n\nUse Pull on the collaborator list to make "
-                "your own copy, work there, and put it back when you are done.",
+                f"'{project_root.name}' is the shared copy in Google Drive. Nobody works "
+                "in it directly.\n\nDouble-click \u201c\u25b6 Open in Live\u201d inside it, or "
+                "click the song on the first screen: that opens your own copy.",
             )
             return
         QMessageBox.information(
@@ -471,3 +677,32 @@ class MainWindow(QMainWindow):
         """Stop every project's thread. Safe to call twice."""
         for pane in self.panes():
             pane.shutdown()
+
+
+def _song_size(hub, song: str, found) -> int:
+    """How much a copy of the song needs: the latest version's files."""
+    try:
+        storage = hub.storage_for(song)
+        versions = storage.list_versions()
+        if versions:
+            from sessionsync.core.manifest import Manifest
+
+            return Manifest.from_json(storage.read_manifest(versions[-1])).total_bytes
+        if found is not None:
+            return sum(p.stat().st_size for p in found.path.rglob("*") if p.is_file())
+    except Exception:  # noqa: BLE001 - unknown size just is not shown
+        pass
+    return 0
+
+
+def _size(num_bytes: int) -> str:
+    from sessionsync.ui.presenter import human_size
+
+    return human_size(num_bytes)
+
+
+def _pretty(path: Path) -> str:
+    try:
+        return f"~/{Path(path).relative_to(locations.home())}"
+    except ValueError:
+        return str(path)

@@ -93,8 +93,16 @@ app = BUNDLE(
     info_plist={
         "CFBundleName": "SessionSync",
         "CFBundleDisplayName": "SessionSync",
-        "CFBundleShortVersionString": "0.1.0",
-        "CFBundleVersion": "0.1.0",
+        "CFBundleShortVersionString": "0.2.0",
+        "CFBundleVersion": "0.2.0",
+        # "▶ Open in Live" in a shared song folder is a sessionsync:// link
+        # (see sessionsync/core/launcher.py); this is what makes it open the app.
+        "CFBundleURLTypes": [
+            {
+                "CFBundleURLName": "com.stefan.sessionsync.open",
+                "CFBundleURLSchemes": ["sessionsync"],
+            }
+        ],
         "NSHighResolutionCapable": True,
         # A real app with a Dock icon and a menu bar, not a background agent.
         "LSUIElement": False,

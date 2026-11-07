@@ -45,6 +45,25 @@ _VIEW_NOISE = {
     "ViewStates",
 }
 _TRACK_TAGS = {"AudioTrack", "MidiTrack", "GroupTrack", "ReturnTrack"}
+#: Song-wide parts worth noticing. Not the transport: it records where the play
+#: head was, which changes every time someone just listens.
+_SONG_TAGS = ("Locators", "Scenes", "GroovePool")
+#: Names the summary uses for the parts of a set that are not ordinary tracks.
+MAIN_TRACK = "Main"
+SONG_PARTS = "Song"
+
+
+def _digest(elements) -> str:
+    """A short hash of some XML, ignoring what Live rewrites on every save."""
+    digest = hashlib.sha1()
+    for element in elements:
+        for noisy in list(element.iter()):
+            noisy.attrib.pop("Id", None)  # Live renumbers these on every save
+            for child in list(noisy):
+                if child.tag in _VIEW_NOISE:
+                    noisy.remove(child)
+        digest.update(ET.tostring(element))
+    return digest.hexdigest()[:12]
 
 _MINOR_VERSION_RE = re.compile(rb"MinorVersion=\"([^\"]+)\"|MinorVersion='([^']+)'")
 _FILE_REF_RE = re.compile(rb"<FileRef>.*?</FileRef>", re.DOTALL)
@@ -274,16 +293,20 @@ class AbletonAdapter:
                 continue
             name_el = track.find("./Name/EffectiveName")
             name = (name_el.get("Value") if name_el is not None else "") or track.tag
-            for noisy in list(track.iter()):
-                noisy.attrib.pop("Id", None)  # Live renumbers these on every save
-                for child in list(noisy):
-                    if child.tag in _VIEW_NOISE:
-                        noisy.remove(child)
-            digest = hashlib.sha1(ET.tostring(track)).hexdigest()[:12]
             unique, n = name, 2
             while unique in found:  # two tracks can share a name
                 unique, n = f"{name} {n}", n + 1
-            found[unique] = digest
+            found[unique] = _digest([track])
+        # The Main track holds tempo and time-signature automation: a tempo change
+        # is a real change, and it lives outside <Tracks>.
+        main = root.find("./LiveSet/MasterTrack")
+        if main is None:
+            main = root.find("./LiveSet/MainTrack")
+        if main is not None:
+            found[MAIN_TRACK] = _digest([main])
+        song = [el for tag in _SONG_TAGS if (el := root.find(f"./LiveSet/{tag}")) is not None]
+        if song:
+            found[SONG_PARTS] = _digest(song)
         return found
 
     def environment_requirements(self, path: Path) -> dict:
