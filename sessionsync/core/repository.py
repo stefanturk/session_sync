@@ -174,7 +174,7 @@ class Repository:
 
         metadata = storage.read_repo_metadata()
         if metadata is None:
-            raise NotAProjectError("No SessionSync project was found at that location.")
+            raise NotAProjectError(_why_no_song(storage))
 
         project_root = Path(project_root)
         project_root.mkdir(parents=True, exist_ok=True)
@@ -994,3 +994,36 @@ def _describe(storage: StorageProvider) -> str:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _why_no_song(storage) -> str:
+    """Why a shared song cannot be read, said so the person can do something about it."""
+    root = getattr(storage, "root", None)
+    if root is None:
+        return "No SessionSync project was found at that location."
+    root = Path(root)
+    meta = root / ".sessionsync"
+    if not root.is_dir():
+        return (
+            f"Session Sync cannot reach {root}. Is Google Drive running and signed in? "
+            "Nothing was changed."
+        )
+    if not meta.is_dir():
+        return (
+            f"Google Drive has not brought this song's Session Sync files to this computer "
+            f"yet (there is no .sessionsync folder in {root}). Wait until Google Drive says "
+            "it is up to date, then try again. Nothing was changed."
+        )
+    inside = sorted(p.name for p in meta.iterdir() if p.name != "Icon\r")
+    if "state.db" in inside:
+        return (
+            f"{meta} has a state.db in it and no repo.json: Google Drive on this computer is "
+            "holding on to a leftover from an older Session Sync instead of the song's real "
+            "files. Quit Google Drive and start it again so it fetches the song afresh. "
+            "Nothing was changed."
+        )
+    return (
+        f"The song's Session Sync files have not fully arrived from Google Drive yet "
+        f"(no repo.json in {meta}; found: {', '.join(inside) or 'nothing'}). Wait until "
+        "Google Drive says it is up to date, then try again. Nothing was changed."
+    )

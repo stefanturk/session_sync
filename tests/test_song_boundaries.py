@@ -180,3 +180,27 @@ def test_a_shared_copy_without_its_history_says_so(tmp_path, song):
         Repository.open(tmp_path / "alice" / "My Song", author=ALICE)
     assert "My Song" in str(caught.value)
     assert "untouched" in str(caught.value)
+
+
+# --- a song Drive has not finished bringing -----------------------------------
+
+
+@pytest.mark.parametrize(
+    "arrange, expect",
+    [
+        (lambda song: __import__("shutil").rmtree(song / META_DIR), "no .sessionsync folder"),
+        (lambda song: (song / META_DIR / "repo.json").unlink(), "not fully arrived"),
+        (
+            lambda song: ((song / META_DIR / "repo.json").unlink(), (song / META_DIR / "state.db").write_bytes(b"")),
+            "leftover",
+        ),
+    ],
+)
+def test_getting_a_copy_says_what_is_missing(tmp_path, song, arrange, expect):
+    from sessionsync.core.errors import NotAProjectError
+
+    arrange(song)
+    with pytest.raises(NotAProjectError) as caught:
+        Repository.clone(MasterFolderStorage(song), tmp_path / "sam" / "My Song", author=BOB)
+    assert expect in str(caught.value)
+    assert "Nothing was changed" in str(caught.value)
