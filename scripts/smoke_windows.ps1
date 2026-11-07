@@ -66,7 +66,9 @@ $door = Join-Path $song "$([char]0x25B6) Open in Live (Windows).url"
 Write-Host "Double-clicking $door"
 Start-Process $door
 $deadline = (Get-Date).AddSeconds(30)
-while (-not (Select-String -Path $log -Pattern "from another copy: sessionsync://open/?\?repo=smoke-door" -Quiet)) {
+# The new copy hands the link over and quits; the running copy logs it. Both
+# write the log at that moment, so accept either of the running copy's lines.
+while (-not (Select-String -Path $log -Pattern "(from another copy|link): sessionsync://open/?\?repo=smoke-door" -Quiet)) {
     if ((Get-Date) -gt $deadline) { Get-Content $log; Fail "double-clicking the launcher did nothing" }
     Start-Sleep -Milliseconds 500
 }
