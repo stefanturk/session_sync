@@ -172,8 +172,10 @@ def _auto_pull(hub: Hub, song: str, settings: Settings, author: dict, open_roots
         return False
 
 
-def join(hub: Hub, song: str, settings: Settings, author: dict, destination: Path | None = None) -> Path:
-    repo = hub.join_song(song, settings.local_root(), author, destination)
+def join(
+    hub: Hub, song: str, settings: Settings, author: dict, destination: Path | None = None, progress=None
+) -> Path:
+    repo = hub.join_song(song, settings.local_root(), author, destination, progress=progress)
     settings.set_song_path(hub, song, repo.project_root, repo.state.repository_id)
     return repo.project_root
 

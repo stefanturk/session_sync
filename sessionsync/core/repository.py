@@ -168,6 +168,7 @@ class Repository:
         project_root: Path,
         *,
         author: dict,
+        progress=None,
     ) -> Repository:
         """Set up a working copy of an existing repository and download it."""
         from sessionsync.core.localstate import LocalState
@@ -190,7 +191,7 @@ class Repository:
             author,
             state,
         )
-        repo.pull()
+        repo.pull(progress=progress)
         return repo
 
     @classmethod
@@ -604,7 +605,12 @@ class Repository:
         self._end_session_marker()
         return PushResult(new_version, diff, uploaded_objects, uploaded_bytes)
 
-    def pull(self, *, replace_my_versions: bool = False) -> PullResult:
+    def pull(self, *, replace_my_versions: bool = False, progress=None) -> PullResult:
+        """Bring this copy up to the newest version.
+
+        `progress(Progress)` is called before each file is fetched and once at
+        the end, so a window can say how far along it is.
+        """
         self.check_format()
         target_version = self.remote_version()
         from_version = self.base_version
@@ -634,6 +640,7 @@ class Repository:
         downloaded = 0
         # Walk the whole target version, not just what changed between versions:
         # a file missing from this computer must come back even if nobody touched it.
+        wanted = []
         for path, entry in sorted(target.files.items()):
             local = self.project_root / path
             if local.exists():
@@ -641,6 +648,13 @@ class Repository:
                     continue  # already have exactly this content
                 if path not in diff.added and path not in diff.modified:
                     continue  # locally edited, and this version does not change it
+            wanted.append((path, entry))
+        total_bytes = sum(entry.size for _, entry in wanted)
+        for number, (path, entry) in enumerate(wanted, 1):
+            local = self.project_root / path
+            if progress is not None:
+                progress(Progress(number, len(wanted), downloaded, total_bytes, path, entry.size))
+            if local.exists():
                 self._to_trash(local, trash)
             try:
                 self.storage.download_object(entry.sha256, local)
@@ -653,6 +667,8 @@ class Repository:
 
         # Files the new version no longer uses stay on this computer: an older
         # revision may need them, and they were never anyone else's to remove.
+        if progress is not None and wanted:
+            progress(Progress(len(wanted), len(wanted), downloaded, total_bytes, "", 0))
         downloaded += self._fetch_past_revisions()
 
         self.state.base_version = target_version
@@ -1027,3 +1043,27 @@ def _why_no_song(storage) -> str:
         f"(no repo.json in {meta}; found: {', '.join(inside) or 'nothing'}). Wait until "
         "Google Drive says it is up to date, then try again. Nothing was changed."
     )
+
+
+@dataclass(frozen=True)
+class Progress:
+    """How far a pull is: file `number` of `files` (`path`, `size` bytes) is next."""
+
+    number: int
+    files: int
+    done_bytes: int
+    total_bytes: int
+    path: str
+    size: int
+
+    def describe(self) -> str:
+        gb = 1024 ** 3
+        amount = f"{self.done_bytes / gb:.1f} of {self.total_bytes / gb:.1f} GB"
+        if not self.path:
+            return f"All {self.files} files copied ({amount})."
+        name = Path(self.path).name
+        return f"File {self.number} of {self.files} ({amount})\n{name} — {_mb(self.size)}"
+
+
+def _mb(size: int) -> str:
+    return f"{size / 1024 ** 2:.0f} MB" if size >= 1024 ** 2 else f"{max(1, size // 1024)} KB"

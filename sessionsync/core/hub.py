@@ -124,7 +124,9 @@ class Hub:
             )
         return master.add_local_project(Path(project), self.path, author=author, name=song_name)
 
-    def join_song(self, song_name: str, local_base: Path, author: dict, destination: Path | None = None) -> Repository:
+    def join_song(
+        self, song_name: str, local_base: Path, author: dict, destination: Path | None = None, *, progress=None
+    ) -> Repository:
         """Get your own working copy of a shared song.
 
         A plain project sitting in the hub is set up first (only the hidden
@@ -138,7 +140,7 @@ class Hub:
         if song.kind == "ready":
             master.adopt(song.path, author=author)
         return master.get_workbench(
-            song.path, destination or free_folder(local_base, song_name), author=author
+            song.path, destination or free_folder(local_base, song_name), author=author, progress=progress
         )
 
 

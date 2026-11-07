@@ -60,13 +60,21 @@ class _Job(QThread):
     """Long work (copying a song out of Drive) off the UI thread, so the window
     never looks frozen. `result` / `error` are read once `finished` fires."""
 
-    def __init__(self, work, parent: QObject | None = None):
+    #: (text, done, total) from the work, queued across to the window's thread.
+    progressed = Signal(str, int, int)
+
+    def __init__(self, work, parent: QObject | None = None, *, reports: bool = False):
         super().__init__(parent)
         self.work, self.result, self.error = work, None, None
+        self.reports = reports
+
+    def report(self, step) -> None:
+        mb = 1024 ** 2
+        self.progressed.emit(step.describe(), step.done_bytes // mb, max(1, step.total_bytes // mb))
 
     def run(self) -> None:
         try:
-            self.result = self.work()
+            self.result = self.work(self.report) if self.reports else self.work()
         except Exception as exc:  # noqa: BLE001 - shown by the caller
             self.error = exc
 
@@ -260,8 +268,9 @@ class MainWindow(QMainWindow):
         author = load_identity()
         local = self._run_job(
             f"Copying {song} to this computer…",
-            lambda: hubsync.join(hub, song, self.settings, author, destination),
+            lambda report: hubsync.join(hub, song, self.settings, author, destination, report),
             "Could not get that song",
+            reports=True,
         )
         if local is None:
             return
@@ -321,14 +330,26 @@ class MainWindow(QMainWindow):
                 return None
             parent = Path(chosen)
 
-    def _run_job(self, label: str, work, failure_title: str):
-        """Run `work` on a thread behind a progress window. Returns its result or None."""
+    def _run_job(self, label: str, work, failure_title: str, *, reports: bool = False):
+        """Run `work` on a thread behind a progress window. Returns its result or None.
+
+        With `reports`, `work` is given a function to call with each
+        repository.Progress, and the window shows file N of M and GB copied.
+        """
         progress = QProgressDialog(label, None, 0, 0, self)
         progress.setWindowTitle(APP_NAME)
         progress.setWindowModality(Qt.WindowModal)
         progress.setMinimumDuration(0)
         progress.setCancelButton(None)
-        job = _Job(work, self)
+        progress.setMinimumWidth(460)
+        job = _Job(work, self, reports=reports)
+
+        def show(text: str, done: int, total: int) -> None:
+            progress.setLabelText(f"{label}\n\n{text}")
+            progress.setRange(0, total)
+            progress.setValue(min(done, total))
+
+        job.progressed.connect(show)
         loop = QEventLoop()
         # Queued to this thread, so a job that finishes before exec() still ends the loop.
         job.finished.connect(loop.quit)

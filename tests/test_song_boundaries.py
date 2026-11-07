@@ -204,3 +204,23 @@ def test_getting_a_copy_says_what_is_missing(tmp_path, song, arrange, expect):
         Repository.clone(MasterFolderStorage(song), tmp_path / "sam" / "My Song", author=BOB)
     assert expect in str(caught.value)
     assert "Nothing was changed" in str(caught.value)
+
+
+# --- getting a copy says how far along it is ---------------------------------
+
+
+def test_getting_a_copy_reports_each_file_and_the_total(tmp_path, song):
+    steps = []
+    Repository.clone(MasterFolderStorage(song), tmp_path / "sam" / "My Song", author=BOB, progress=steps.append)
+    files = steps[0].files
+    assert files >= 2
+    assert [s.number for s in steps[:-1]] == list(range(1, files + 1))
+    assert steps[-1].done_bytes == steps[-1].total_bytes > 0
+    assert "File 1 of" in steps[0].describe()
+    assert "All" in steps[-1].describe()
+
+
+def test_a_copy_already_up_to_date_reports_nothing(tmp_path, song):
+    steps = []
+    Repository.open(tmp_path / "alice" / "My Song", author=ALICE).pull(progress=steps.append)
+    assert steps == []

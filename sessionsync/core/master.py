@@ -89,14 +89,16 @@ def adopt(folder: Path, *, author: dict, adapter: AbletonAdapter | None = None) 
     return manifest
 
 
-def get_workbench(master_folder: Path, destination: Path, *, author: dict) -> Repository:
+def get_workbench(master_folder: Path, destination: Path, *, author: dict, progress=None) -> Repository:
     """Copy the shared project to `destination` and link it as a working copy."""
     destination = Path(destination)
     if destination.exists() and any(destination.iterdir()):
         raise FileExistsError(f"{destination} already has files in it; choose a new folder.")
     created = not destination.exists()
     try:
-        return Repository.clone(MasterFolderStorage(master_folder), destination, author=author)
+        return Repository.clone(
+            MasterFolderStorage(master_folder), destination, author=author, progress=progress
+        )
     except BaseException:
         if created:
             shutil.rmtree(destination, ignore_errors=True)
