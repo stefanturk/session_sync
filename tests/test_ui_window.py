@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from sessionsync.ui.settings import Settings  # noqa: E402
 from sessionsync.ui.window import MainWindow  # noqa: E402
+from tests.conftest import record
 
 
 @pytest.fixture(scope="session")
@@ -160,7 +161,7 @@ def test_closing_a_project_with_nothing_outstanding_does_not_ask(window, alice):
 
 
 def test_closing_a_project_with_unpushed_work_asks_first(window, alice):
-    (alice.project_root / "Samples" / "Recorded" / "Sax.aif").write_bytes(b"sax")
+    record(alice.project_root, "Samples/Recorded/Sax.aif", b"sax")
     pane = window.open_project(alice.project_root)
     pane._show(_snapshot_of(alice.project_root))
     asked = _answer(window, "cancel")
@@ -172,7 +173,7 @@ def test_closing_a_project_with_unpushed_work_asks_first(window, alice):
 
 
 def test_closing_anyway_closes_it(window, alice):
-    (alice.project_root / "Samples" / "Recorded" / "Sax.aif").write_bytes(b"sax")
+    record(alice.project_root, "Samples/Recorded/Sax.aif", b"sax")
     pane = window.open_project(alice.project_root)
     pane._show(_snapshot_of(alice.project_root))
     _answer(window, "close")
@@ -186,7 +187,7 @@ def test_closing_anyway_closes_it(window, alice):
 
 
 def test_choosing_to_push_first_keeps_the_project_open(window, alice, monkeypatch):
-    (alice.project_root / "Samples" / "Recorded" / "Sax.aif").write_bytes(b"sax")
+    record(alice.project_root, "Samples/Recorded/Sax.aif", b"sax")
     pane = window.open_project(alice.project_root)
     pane._show(_snapshot_of(alice.project_root))
     _answer(window, "push")
@@ -214,7 +215,7 @@ def test_closing_a_tab_ends_the_session_rather_than_leaving_a_ghost(window, alic
 
 def test_quitting_with_unpushed_work_asks_once_for_everything(window, alice, bob):
     for repo in (alice, bob):
-        (repo.project_root / "Samples" / "Recorded" / "Sax.aif").write_bytes(b"sax")
+        record(repo.project_root, "Samples/Recorded/Sax.aif", b"sax")
     for repo in (alice, bob):
         pane = window.open_project(repo.project_root)
         pane._show(_snapshot_of(repo.project_root))

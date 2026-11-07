@@ -36,13 +36,13 @@ class SongRow:
     state: str  # "ready" | "new" | "behind" | "current"
     behind_by: int = 0
     working: list = field(default_factory=list)  # names of others at it right now
-    unpushed: list = field(default_factory=list)  # names of others with changes not put back
+    unpushed: list = field(default_factory=list)  # names of others with changes not pushed
 
     @property
     def label(self) -> str:
         text = self._base_label
         if self.unpushed and not self.working and self.state != "current":
-            text += f" · {', '.join(self.unpushed)} has changes not put back"
+            text += f" · {', '.join(self.unpushed)} has changes not pushed"
         return text
 
     @property
@@ -50,14 +50,14 @@ class SongRow:
         if self.working:
             return f"{', '.join(self.working)} is working on it now"
         if self.state == "ready":
-            return "Ready to add · Get it"
+            return "Ready to add · Pull"
         if self.state == "new":
-            return "Not on this Mac yet · Get it"
+            return "Not on this Mac yet · Pull"
         if self.state == "behind":
             n = self.behind_by
             return f"{n} newer version{'s' if n != 1 else ''} to get"
         if self.unpushed:
-            return f"{', '.join(self.unpushed)} has changes not put back"
+            return f"{', '.join(self.unpushed)} has changes not pushed"
         return "Up to date"
 
     @property
@@ -82,7 +82,7 @@ def song_rows(hub: Hub, settings: Settings, me: dict | None = None) -> list[Song
 
 
 def others_on(song: HubSong, me: dict | None) -> tuple[list[str], list[str]]:
-    """Who else is at this song right now, and who has changes they have not put back."""
+    """Who else is at this song right now, and who has changes they have not pushed."""
     from sessionsync.core.session import ACTIVE_AFTER_SECONDS, UNPUSHED_STAYS_FOR_SECONDS, _parse
     from datetime import datetime, timedelta, timezone
 
@@ -120,7 +120,7 @@ def live_warning(settings: Settings, author: dict, document: Path | None) -> New
             if livewatch.is_open_in(song.path, document):
                 return News(
                     f"You opened the shared copy of {song.name} directly. Work on your own "
-                    "copy instead (Get it), or Live will change what everyone else gets.",
+                    "copy instead (Pull), or Live will change what everyone else gets.",
                     hub, song.name, None,
                 )
             if local.is_dir() and livewatch.is_open_in(local, document):

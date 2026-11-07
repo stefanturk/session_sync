@@ -17,8 +17,8 @@ from datetime import datetime, timedelta, timezone
 HEARTBEAT_SECONDS = 60
 ACTIVE_AFTER_SECONDS = 15 * 60
 ABANDONED_AFTER_SECONDS = 24 * 60 * 60
-# "I have changes I have not put back" is a promise, not a heartbeat: it stays
-# visible until the work is put back or discarded (or this long has passed).
+# "I have changes I have not pushed" is a promise, not a heartbeat: it stays
+# visible until the work is pushed or discarded (or this long has passed).
 UNPUSHED_STAYS_FOR_SECONDS = 14 * 24 * 60 * 60
 
 
@@ -87,7 +87,7 @@ def describe_sessions(sessions: list[dict]) -> str:
             when = _friendly_day(session.get("unpushed_since") or session.get("started_at"))
             what = session.get("changed")
             lines.append(
-                f"{who} has changes they have not put back"
+                f"{who} has changes they have not pushed"
                 + (f" since {when}" if when else "")
                 + (f" ({what})." if what else ".")
             )

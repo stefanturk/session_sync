@@ -2,7 +2,7 @@ import gzip
 
 from sessionsync.core.hub import Hub, compare_scans, pull_if_safe
 from sessionsync.core.repository import Repository
-from tests.conftest import ALICE, BOB, als_with_tracks, write_project
+from tests.conftest import ALICE, BOB, als_with_tracks, write_project, record
 
 
 def make_hub(tmp_path, name="Sam"):
@@ -65,7 +65,7 @@ def test_song_a_scenario_from_the_brief(tmp_path):
     # My push is refused until I pull; pulling is automatic because I have no unpushed work.
     mine_again = Repository.open(mine.project_root, author=ALICE)
     assert pull_if_safe(mine_again).to_version == 3
-    (mine.project_root / "Samples" / "Recorded" / "Mine.wav").write_bytes(b"mine")
+    record(mine.project_root, "Samples/Recorded/Mine.wav", b"mine")
     assert mine_again.push().version == 4
 
 
@@ -73,10 +73,10 @@ def test_auto_pull_leaves_unpushed_work_alone(tmp_path):
     hub = make_hub(tmp_path)
     mine = hub.add_song("S", write_project(tmp_path / "me" / "S", "S"), ALICE)
     sam = hub.join_song("S", tmp_path / "sam-music", BOB)
-    (sam.project_root / "Samples" / "Recorded" / "New.wav").write_bytes(b"n")
+    record(sam.project_root, "Samples/Recorded/New.wav", b"n")
     sam.push()
 
-    (mine.project_root / "Samples" / "Recorded" / "Mine.wav").write_bytes(b"m")  # unpushed work
+    record(mine.project_root, "Samples/Recorded/Mine.wav", b"m")  # unpushed work
     repo = Repository.open(mine.project_root, author=ALICE)
     assert pull_if_safe(repo) is None
     assert repo.base_version == 1
@@ -86,7 +86,7 @@ def test_auto_pull_skips_an_open_session(tmp_path):
     hub = make_hub(tmp_path)
     mine = hub.add_song("S", write_project(tmp_path / "me" / "S", "S"), ALICE)
     sam = hub.join_song("S", tmp_path / "sam-music", BOB)
-    (sam.project_root / "Samples" / "Recorded" / "New.wav").write_bytes(b"n")
+    record(sam.project_root, "Samples/Recorded/New.wav", b"n")
     sam.push()
 
     repo = Repository.open(mine.project_root, author=ALICE)
@@ -147,6 +147,6 @@ def test_getting_a_ready_project_sets_it_up_in_place_then_copies(tmp_path):
 def test_people_notes_show_on_the_song(tmp_path):
     hub = make_hub(tmp_path)
     mine = hub.add_song("S", write_project(tmp_path / "me" / "S", "S"), ALICE)
-    (mine.project_root / "Samples" / "Recorded" / "x.wav").write_bytes(b"x")
+    record(mine.project_root, "Samples/Recorded/x.wav", b"x")
     mine.refresh_presence(live_here=False)
     assert hub.songs()[0].people[0]["state"] == "unpushed"

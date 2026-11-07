@@ -9,7 +9,7 @@ import pytest
 
 from sessionsync.core.errors import StalePushError
 from sessionsync.core.repository import Repository
-from tests.conftest import BOB
+from tests.conftest import BOB, als_marked, live_set, record
 
 
 class Boom(Exception):
@@ -51,7 +51,7 @@ def assert_repository_is_intact(storage):
 @pytest.fixture
 def big_change(project):
     for i in range(4):
-        (project / "Samples" / "Recorded" / f"Take {i}.wav").write_bytes(f"take {i}".encode())
+        record(project, f"Samples/Recorded/Take {i}.wav", f"take {i}".encode())
     return project
 
 
@@ -117,7 +117,7 @@ class TestPullInterrupted:
     def test_a_failed_download_never_leaves_a_half_written_audio_file(
         self, alice, bob, remote, project
     ):
-        (project / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"guitar" * 1000)
+        record(project, "Samples/Recorded/Guitar.wav", b"guitar" * 1000)
         alice.push(note="Guitar")
         bob.storage = FailingStorage(remote, "download_object")
 
@@ -129,7 +129,7 @@ class TestPullInterrupted:
     def test_replaced_files_survive_a_failed_pull_in_the_local_trash(
         self, alice, bob, remote, project
     ):
-        (project / "My Song.als").write_bytes(b"alice new arrangement")
+        (project / "My Song.als").write_bytes(als_marked(b"alice new arrangement"))
         alice.push(note="Arrangement")
         bob.storage = FailingStorage(remote, "download_object")
 
@@ -142,7 +142,7 @@ class TestPullInterrupted:
     def test_a_failed_pull_does_not_pretend_the_version_arrived(
         self, alice, bob, remote, project
     ):
-        (project / "My Song.als").write_bytes(b"alice edit")
+        (project / "My Song.als").write_bytes(als_marked(b"alice edit"))
         alice.push(note="Alice")
         bob.storage = FailingStorage(remote, "download_object")
 
@@ -157,8 +157,8 @@ class TestSimultaneousPush:
         self, alice, bob, remote, project
     ):
         """Bob checks the version, then Alice publishes before Bob's manifest lands."""
-        (bob.project_root / "Samples" / "Recorded" / "Bass.wav").write_bytes(b"bob bass")
-        (project / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"alice guitar")
+        record(bob.project_root, "Samples/Recorded/Bass.wav", b"bob bass")
+        record(project, "Samples/Recorded/Guitar.wav", b"alice guitar")
 
         original_existing = remote.existing_objects
         fired = []
@@ -184,8 +184,12 @@ class TestSimultaneousPush:
     def test_the_loser_keeps_their_recordings_and_can_push_after_pulling(
         self, alice, bob, remote, project
     ):
+        # Bob's idea lives in its own Live Set, so pulling Alice's Set does not touch it
+        (bob.project_root / "Bob Sketch.als").write_bytes(
+            live_set(samples=["Samples/Recorded/Bass.wav"])
+        )
         (bob.project_root / "Samples" / "Recorded" / "Bass.wav").write_bytes(b"bob bass")
-        (project / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"alice guitar")
+        record(project, "Samples/Recorded/Guitar.wav", b"alice guitar")
         alice.push(note="Alice guitar")
 
         with pytest.raises(StalePushError):

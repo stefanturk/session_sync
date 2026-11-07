@@ -2,7 +2,7 @@ from sessionsync.core.hub import Hub
 from sessionsync.core.repository import Repository
 from sessionsync.ui import hubsync
 from sessionsync.ui.settings import Settings
-from tests.conftest import ALICE, BOB, als_with_tracks, write_project
+from tests.conftest import ALICE, BOB, als_with_tracks, write_project, record
 
 
 def setup_world(tmp_path, monkeypatch):
@@ -24,7 +24,7 @@ def test_rows_show_new_behind_and_current(tmp_path, monkeypatch):
     assert states == {"Song A": "current", "Song B": "new"}
 
     hubsync.join(hub, "Song B", settings, ALICE)
-    (bob_song.project_root / "Samples" / "Recorded" / "x.wav").write_bytes(b"x")
+    record(bob_song.project_root, "Samples/Recorded/x.wav", b"x")
     bob_song.push(note="more")
     rows = {r.song.name: r for r in hubsync.song_rows(hub, settings)}
     assert rows["Song B"].state == "behind" and rows["Song B"].label == "1 newer version to get"
@@ -59,7 +59,7 @@ def test_open_songs_and_unpushed_work_are_not_pulled(tmp_path, monkeypatch):
     mine_path = hubsync.share(hub, write_project(tmp_path / "me" / "S", "S"), settings, ALICE)
     hubsync.check_hubs(settings, ALICE)
     sam = hub.join_song("S", tmp_path / "sam", BOB)
-    (sam.project_root / "Samples" / "Recorded" / "n.wav").write_bytes(b"n")
+    record(sam.project_root, "Samples/Recorded/n.wav", b"n")
     sam.push()
 
     msgs = hubsync.check_hubs(settings, ALICE, open_roots={mine_path})
@@ -72,7 +72,7 @@ def test_my_own_pushes_are_not_news(tmp_path, monkeypatch):
     path = hubsync.share(hub, write_project(tmp_path / "me" / "S", "S"), settings, ALICE)
     hubsync.check_hubs(settings, ALICE)
     repo = Repository.open(path, author=ALICE, storage=hub.storage_for("S"))
-    (path / "Samples" / "Recorded" / "mine.wav").write_bytes(b"m")
+    record(path, "Samples/Recorded/mine.wav", b"m")
     repo.push()
     assert hubsync.check_hubs(settings, ALICE) == []
 
@@ -86,11 +86,11 @@ def test_rows_say_who_is_working_and_who_has_unpushed_changes(tmp_path, monkeypa
     assert row.working == ["Bob"] and "working on it now" in row.label
     assert hubsync.song_rows(hub, settings, BOB)[0].working == []  # not about yourself
 
-    (sam.project_root / "Samples" / "Recorded" / "x.wav").write_bytes(b"x")
+    record(sam.project_root, "Samples/Recorded/x.wav", b"x")
     sam.refresh_presence(live_here=False)
     row = hubsync.song_rows(hub, settings, ALICE)[0]
     assert row.working == [] and row.unpushed == ["Bob"]
-    assert "not put back" in row.label
+    assert "not pushed" in row.label
 
 
 def test_live_warning_when_opening_a_set_someone_is_on(tmp_path, monkeypatch):

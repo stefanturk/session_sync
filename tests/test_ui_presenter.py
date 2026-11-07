@@ -48,7 +48,7 @@ def test_being_behind_is_the_loudest_thing_on_screen():
     model = screen(make_status("behind", local=23, remote=25), project_name="My Song")
     assert model.banner.level == "warning"
     assert "2 versions behind" in model.banner.text
-    assert "Get the latest" in model.banner.text
+    assert "Pull the latest" in model.banner.text
 
 
 def test_one_version_behind_is_not_pluralised():
@@ -60,7 +60,7 @@ def test_unpushed_work_is_reported_as_information_not_alarm():
     status = make_status("local_changes", added={"Samples/Sax.aif": "a"})
     model = screen(status, project_name="My Song")
     assert model.banner.level == "info"
-    assert "not been put back" in model.banner.text
+    assert "not been pushed" in model.banner.text
 
 
 def test_behind_with_unpushed_work_explains_the_work_is_safe():
@@ -95,7 +95,7 @@ def test_the_header_says_pull_required_when_behind_blocks_a_push():
 
 def test_the_header_names_unpushed_work():
     status = make_status("local_changes", added={"a": "a"})
-    assert screen(status, project_name="X").state_label == "NOT PUT BACK"
+    assert screen(status, project_name="X").state_label == "NOT PUSHED"
 
 
 def test_an_open_session_is_stated_in_the_header():
@@ -127,7 +127,7 @@ def test_pull_is_offered_when_behind():
 def test_you_cannot_start_a_session_from_an_old_version():
     model = screen(make_status("behind", local=1, remote=2), project_name="My Song")
     assert not model.start.enabled
-    assert "Get the latest" in model.start.reason
+    assert "Pull the latest" in model.start.reason
 
 
 def test_start_session_is_offered_when_current():
@@ -158,7 +158,7 @@ def test_push_is_refused_while_behind_even_with_work():
     status = make_status("push_blocked", local=1, remote=2, added={"Sax.aif": "a"})
     model = screen(status, project_name="My Song")
     assert not model.push.enabled
-    assert "Get the latest" in model.push.reason
+    assert "Pull the latest" in model.push.reason
 
 
 def test_review_follows_having_changes():

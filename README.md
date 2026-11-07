@@ -16,7 +16,8 @@ before you start playing — not after two hours of takes.
 | CLI (`sessionsync`) | done |
 | PySide6 Mac app, packaged as a `.app` | done |
 | Shared folders ("hubs"), version summaries, restore a copy, clickable banners | done |
-| Test suite, incl. crash and stale-push tests | 298 passing |
+| Consolidate on Push (only used files, outside files copied in, Past Revisions) | done |
+| Test suite, incl. crash and stale-push tests | 370 passing |
 | Google Drive backend | next |
 
 Proven on a real 415 MB Live 11 project: byte-for-byte reconstruction of 103
@@ -35,6 +36,8 @@ sessionsync song new Sam "~/Music/Ableton/My Song"   # share a project you have
 sessionsync song join Sam "Song B"                   # download one of theirs
 sessionsync hub news                                 # what changed since you looked
 sessionsync history                                  # each version, in plain words
+sessionsync push --dry-run                           # what Push would send and leave behind
+sessionsync open-rev 7                               # open revision 7 in Live
 sessionsync restore 7 --to "~/Desktop/My Song v7"    # an old version, in a new folder
 ```
 
@@ -90,7 +93,7 @@ sessionsync push -m "Guitar overdubs"
 ```
 
 `sessionsync --help` lists the rest: `review`, `pull`, `history`, `who`,
-`session end`.
+`open-rev`, `session end`.
 
 Or open the window on the same project:
 
@@ -116,16 +119,31 @@ asserts the current version never names a missing file) and `test_pull_safety.py
 (a pull never silently replaces work that only exists on your Mac).
 
 
-## Shared copy and your own copy (Get it / Put back)
+## Shared copy and your own copy (Pull / Push)
 
 The shared copy in a Drive folder is an ordinary Ableton project, plus a hidden `.sessionsync/` folder.
-Nobody works in it. Each person **gets** their own working copy anywhere on their Mac, works there, and
-**puts it back** when done:
+Nobody works in it. Each person **pulls** their own working copy anywhere on their Mac, works there, and
+**pushes** when done.
 
-- Put back only works if you started from the newest version; otherwise **Catch Up** saves your whole
+Every Push first runs **Consolidate**, Session Sync's own Collect All and Save, so nobody has to:
+
+- Only the files the Live Sets actually use are sent. Unused takes and old bounces stay on your Mac.
+- Samples used from elsewhere on your Mac (Downloads, a sample library) are copied into the shared
+  copy's `Samples/Imported/`. Only the shared copy of the Set is re-pointed at them, and it is checked
+  before anything uploads. Your own `.als` is never touched.
+- Ableton's own Packs (Core Library) are not copied; Push says which ones a collaborator needs.
+- Missing samples are listed (Push still goes). An unreadable Set, or a main Set saved by Live 10,
+  stops Push with a reason: re-save it in Live 11 or newer.
+- The main Set is saved as `Past Revisions/Rev 0007 - <date> - <who> - <note>.als`.
+
+Nothing a revision used is ever deleted from the shared copy. A sample that Rev 8 stops using stays where
+Rev 7 had it, so every Past Revision opens straight from the shared folder. Pull brings down what the
+current revision uses, plus the small Past Revisions Sets. **Open in Live** (History) or `open-rev N`
+fetches whatever an old revision needs first.
+
+- Push only works if you started from the newest version; otherwise **Catch Up** saves your whole
   version aside first, brings theirs, and lists who changed which tracks.
-- The shared copy changes only when a put-back succeeds. A crash part way is finished or undone by the next client.
-- Only the last 5 versions are kept (as changed-file history), plus any you `pin`.
-- Others see "working now" (from the app, and Live's own log) and "has changes not put back" until they do.
-- If Google Drive is still syncing, getting the latest stops with a message instead of half-copying.
+- The shared copy changes only when a push succeeds. A crash part way is finished or undone by the next client.
+- Others see "working now" (from the app, and Live's own log) and "has changes not pushed" until they do.
+- If Google Drive is still syncing, pulling stops with a message instead of half-copying.
 - Not built yet: automatically combining two edited sets (Catch Up keeps both sets side by side instead).

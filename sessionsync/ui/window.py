@@ -187,7 +187,7 @@ class MainWindow(QMainWindow):
             self.start.refresh()
 
     def open_song(self, hub, song: str) -> None:
-        """Open your copy of a shared song, getting it first if you do not have one."""
+        """Open your copy of a shared song, pulling it first if you do not have one."""
         local = self.settings.song_path(hub, song)
         if local.is_dir() and LocalState.exists(local):
             self.open_project(local)
@@ -347,7 +347,7 @@ class MainWindow(QMainWindow):
                 self,
                 "This is the shared copy",
                 f"'{project_root.name}' is the shared copy in the shared folder. Nobody "
-                "works in it directly.\n\nUse Get it on the collaborator list to make "
+                "works in it directly.\n\nUse Pull on the collaborator list to make "
                 "your own copy, work there, and put it back when you are done.",
             )
             return
@@ -417,9 +417,9 @@ class MainWindow(QMainWindow):
         """Ask before walking away from work that only exists on this Mac."""
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
-        box.setText(f"{pane.project_name} has changes that are not put back.")
+        box.setText(f"{pane.project_name} has changes that are not pushed.")
         box.setInformativeText(close_warning(pane.snapshot.status) or "")
-        push = box.addButton("Put Back First…", QMessageBox.AcceptRole)
+        push = box.addButton("Push First…", QMessageBox.AcceptRole)
         close = box.addButton("Close Anyway", QMessageBox.DestructiveRole)
         cancel = box.addButton("Cancel", QMessageBox.RejectRole)
         box.setDefaultButton(cancel)
@@ -434,7 +434,7 @@ class MainWindow(QMainWindow):
         names = "\n".join(f"   {pane.project_name}" for pane in panes)
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
-        box.setText(f"{len(panes)} projects have changes that are not put back.")
+        box.setText(f"{len(panes)} projects have changes that are not pushed.")
         box.setInformativeText(
             f"{names}\n\nQuitting does not delete anything — the files stay in "
             "their project folders — but the work is not backed up, and nobody "

@@ -8,6 +8,7 @@ from sessionsync.core.session import (
     active_sessions,
     describe_sessions,
 )
+from tests.conftest import record, als_marked
 
 
 def ago(seconds):
@@ -27,14 +28,14 @@ class TestStartingASession:
 
     def test_takes_a_baseline_so_changes_can_be_reviewed_later(self, alice, project):
         alice.start_session()
-        (project / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"guitar")
+        record(project, "Samples/Recorded/Guitar.wav", b"guitar")
 
         assert alice.review().added == ["Samples/Recorded/Guitar.wav"]
 
     def test_refuses_to_start_when_someone_else_has_already_pushed(
         self, alice, bob, project
     ):
-        (project / "My Song.als").write_bytes(b"alice edit")
+        (project / "My Song.als").write_bytes(als_marked(b"alice edit"))
         alice.push(note="Alice")
 
         with pytest.raises(ProjectBehindError) as excinfo:
@@ -43,7 +44,7 @@ class TestStartingASession:
         assert "Pull latest" in str(excinfo.value)
 
     def test_can_be_forced_when_working_offline(self, alice, bob, project):
-        (project / "My Song.als").write_bytes(b"alice edit")
+        (project / "My Song.als").write_bytes(als_marked(b"alice edit"))
         alice.push(note="Alice")
 
         bob.start_session(force=True)
@@ -86,7 +87,7 @@ class TestSeeingOtherPeople:
         self, alice, project, remote
     ):
         alice.start_session()
-        (project / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"guitar")
+        record(project, "Samples/Recorded/Guitar.wav", b"guitar")
 
         alice.push(note="Guitar")
 
@@ -105,7 +106,7 @@ class TestPresenceIsAdvisoryOnly:
         self, alice, bob, project
     ):
         bob.start_session()
-        (project / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"guitar")
+        record(project, "Samples/Recorded/Guitar.wav", b"guitar")
 
         assert alice.push(note="Guitar").version == 2
 
@@ -113,7 +114,7 @@ class TestPresenceIsAdvisoryOnly:
         self, alice, project, remote
     ):
         remote.write_session("crashed-1", {"display_name": "Ghost", "last_heartbeat": ago(99999)})
-        (project / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"guitar")
+        record(project, "Samples/Recorded/Guitar.wav", b"guitar")
 
         assert alice.push(note="Guitar").version == 2
 

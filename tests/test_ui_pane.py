@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from sessionsync.ui.engine import Engine  # noqa: E402
 from sessionsync.ui.pane import ProjectPane  # noqa: E402
+from tests.conftest import record
 
 
 @pytest.fixture(scope="session")
@@ -62,7 +63,7 @@ def test_a_freshly_pushed_project_reads_as_up_to_date(pane, alice, identity):
 
 
 def test_a_new_recording_appears_in_the_change_list(pane, alice, identity):
-    (alice.project_root / "Samples" / "Recorded" / "Sax.aif").write_bytes(b"sax take")
+    record(alice.project_root, "Samples/Recorded/Sax.aif", b"sax take")
 
     pane._show(snapshot_of(alice.project_root))
 
@@ -74,7 +75,7 @@ def test_a_new_recording_appears_in_the_change_list(pane, alice, identity):
 
 
 def test_being_behind_disables_starting_a_session(pane, alice, bob, identity):
-    (bob.project_root / "Samples" / "Recorded" / "Bass.aif").write_bytes(b"bass")
+    record(bob.project_root, "Samples/Recorded/Bass.aif", b"bass")
     bob.push(note="Bass")
 
     pane._show(snapshot_of(alice.project_root))
@@ -82,7 +83,7 @@ def test_being_behind_disables_starting_a_session(pane, alice, bob, identity):
     assert "behind" in pane.banner.text()
     assert not pane.session_button.isEnabled()
     assert pane.pull_button.isEnabled()
-    assert "Get the latest" in pane.session_button.toolTip()
+    assert "Pull the latest" in pane.session_button.toolTip()
 
 
 def test_someone_else_working_is_shown_on_the_presence_line(pane, alice, bob, identity):
@@ -97,7 +98,7 @@ def test_someone_else_working_is_shown_on_the_presence_line(pane, alice, bob, id
 def test_a_background_check_does_not_take_the_buttons_away(pane, alice, identity):
     """A 6 GB project takes seconds to scan. Greying the app out every minute
     while it happens would make it feel broken."""
-    (alice.project_root / "Samples" / "Recorded" / "Sax.aif").write_bytes(b"sax take")
+    record(alice.project_root, "Samples/Recorded/Sax.aif", b"sax take")
     pane._show(snapshot_of(alice.project_root))
 
     pane._checking(True)
@@ -107,7 +108,7 @@ def test_a_background_check_does_not_take_the_buttons_away(pane, alice, identity
 
 
 def test_a_real_operation_does_take_the_buttons_away(pane, alice, identity):
-    (alice.project_root / "Samples" / "Recorded" / "Sax.aif").write_bytes(b"sax take")
+    record(alice.project_root, "Samples/Recorded/Sax.aif", b"sax take")
     pane._show(snapshot_of(alice.project_root))
 
     pane._busy_changed("Pushing…")
@@ -116,7 +117,7 @@ def test_a_real_operation_does_take_the_buttons_away(pane, alice, identity):
 
 
 def test_the_recommended_action_stands_out(pane, alice, identity):
-    (alice.project_root / "Samples" / "Recorded" / "Sax.aif").write_bytes(b"sax take")
+    record(alice.project_root, "Samples/Recorded/Sax.aif", b"sax take")
 
     pane._show(snapshot_of(alice.project_root))
 
@@ -142,3 +143,46 @@ def test_a_push_with_nothing_to_push_is_a_reported_failure_not_a_crash(qt_app, i
     engine.push("")
 
     assert failures[0][0] == "push"
+
+
+def test_the_push_preview_says_what_consolidate_will_do(qt_app, identity, alice, tmp_path):
+    from sessionsync.ui.dialogs import push_preview
+
+    (alice.project_root / "Samples" / "Recorded" / "Old Take.wav").write_bytes(b"x" * 2048)
+    outside = tmp_path / "Downloads" / "Room Mic.wav"
+    outside.parent.mkdir()
+    outside.write_bytes(b"room")
+    from tests.test_consolidate import ref, set_with
+    from tests.conftest import VOCAL
+
+    (alice.project_root / "My Song.als").write_bytes(
+        set_with(ref(VOCAL, "/x"), ref("Room Mic.wav", str(outside), ref_type="6"),
+                 ref("Gone.wav", "/nowhere/Gone.wav"))
+    )
+    engine = Engine(alice.project_root)
+    shots = []
+    engine.snapshot_ready.connect(shots.append)
+    engine.refresh()
+
+    lines, problems = push_preview(shots[-1])
+    text = "\n".join(lines)
+
+    assert problems == []
+    assert "Copying in 1 file from elsewhere" in text
+    assert "Leaving 1 file the song does not use (2.0 KB)" in text
+    assert "1 file the song uses cannot be found" in text and "Gone.wav" in text
+    assert "Past Revisions" in text
+
+
+def test_the_push_preview_blocks_an_unreadable_set(qt_app, identity, alice):
+    from sessionsync.ui.dialogs import push_preview
+
+    (alice.project_root / "My Song.als").write_bytes(b"broken")
+    engine = Engine(alice.project_root)
+    shots = []
+    engine.snapshot_ready.connect(shots.append)
+    engine.refresh()
+
+    _, problems = push_preview(shots[-1])
+
+    assert problems and "could not be read" in problems[0]

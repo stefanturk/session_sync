@@ -1,11 +1,11 @@
 import pytest
 
-from tests.conftest import als_with_tracks
+from tests.conftest import als_with_tracks, record
 
 
 def test_restore_copy_rebuilds_an_old_version_without_touching_the_project(alice, tmp_path):
     root = alice.project_root
-    (root / "Samples" / "Recorded" / "Vocal.wav").write_bytes(b"BROKEN")
+    record(root, "Samples/Recorded/Vocal.wav", b"BROKEN")
     alice.push(note="oops")
     assert alice.base_version == 2
 
@@ -40,7 +40,7 @@ def test_history_carries_summaries(alice):
 
 
 def test_versions_after(alice):
-    (alice.project_root / "Samples" / "Recorded" / "More.wav").write_bytes(b"m")
+    record(alice.project_root, "Samples/Recorded/More.wav", b"m")
     alice.push()
     assert [h.version for h in alice.versions_after(1)] == [2]
     assert alice.versions_after(2) == []

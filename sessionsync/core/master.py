@@ -118,7 +118,7 @@ def add_local_project(
     if target.exists():
         raise FileExistsError(
             f"The shared folder already has '{target.name}'. If it is the same song, "
-            "use Get it instead."
+            "use Pull instead."
         )
     try:
         repo = Repository.create(local_folder, MasterFolderStorage(target), adapter=adapter, author=author)

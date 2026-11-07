@@ -32,8 +32,12 @@ class Snapshot:
     status: Status
     session_open: bool
     last_push: dict | None = None
-    media_outside: list[str] = field(default_factory=list)
-    media_missing: list[str] = field(default_factory=list)
+    media_outside: list[str] = field(default_factory=list)   # copied in on Push
+    media_missing: list[str] = field(default_factory=list)   # used, but nowhere on this Mac
+    unused: list[str] = field(default_factory=list)          # audio the Sets do not use: stays here
+    unused_bytes: int = 0
+    packs: list[str] = field(default_factory=list)           # Ableton Packs a collaborator needs
+    problems: list[str] = field(default_factory=list)        # reasons Push would stop
 
 
 class Engine(QObject):
@@ -134,6 +138,14 @@ class Engine(QObject):
     def history(self) -> None:
         self._run("history", "Reading history…", lambda: self._repository().history())
 
+    @Slot(int)
+    def open_revision(self, version: int) -> None:
+        self._run(
+            "open_revision",
+            f"Getting Rev {version} ready…",
+            lambda: self._repository().open_revision(version),
+        )
+
     @Slot(int, str)
     def restore(self, version: int, destination: str) -> None:
         self._run(
@@ -162,25 +174,21 @@ class Engine(QObject):
 
     def _emit_snapshot(self) -> None:
         repo = self._repository()
-        outside: list[str] = []
-        missing: list[str] = []
-        referenced = getattr(repo.adapter, "referenced_media", None)
-        if referenced is not None:
-            try:
-                report = referenced(repo.project_root)
-                outside, missing = report.outside, report.missing
-            except Exception:  # noqa: BLE001 - an unreadable set must not block status
-                pass
-
+        status = repo.status()
+        plan = status.plan  # Consolidate: what Push would send, and what it leaves here
         self.snapshot_ready.emit(
             Snapshot(
                 project_root=repo.project_root,
                 project_name=repo.project_root.name,
-                status=repo.status(),
+                status=status,
                 session_open=bool(repo.state.session),
                 last_push=repo.state.last_push,
-                media_outside=outside,
-                media_missing=missing,
+                media_outside=[str(p) for p in plan.imported.values()] if plan else [],
+                media_missing=list(plan.missing) if plan else [],
+                unused=list(plan.unused) if plan else [],
+                unused_bytes=plan.unused_bytes if plan else 0,
+                packs=list(plan.packs) if plan else [],
+                problems=list(plan.problems) if plan else [],
             )
         )
 

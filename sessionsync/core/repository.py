@@ -3,13 +3,20 @@
 There is one current version of a project and no merging. A push is allowed
 only when this computer started from the version the remote is still on; the
 moment someone else publishes first, everyone else must pull before they can
-push. Nothing local is ever deleted outright — replaced and removed files go to
-a local trash folder first.
+push. Nothing local is ever deleted outright — replaced files go to a local
+trash folder first, and files a newer version no longer uses are left alone.
+
+Every push first runs Consolidate (the adapter's `plan_push`): only the files
+the Live Sets use are sent, files from outside the project are copied in, and
+the main Set is saved into Past Revisions/.
 """
 
 from __future__ import annotations
 
+import hashlib
+import re
 import shutil
+import tempfile
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -64,6 +71,8 @@ class Status:
     upload_bytes: int
     already_stored_bytes: int
     active_sessions: list = field(default_factory=list)
+    #: Consolidate's view: unused, outside, missing files (None for other DAWs)
+    plan: object | None = None
 
     @property
     def versions_behind(self) -> int:
@@ -85,7 +94,8 @@ class VersionSummary:
     deleted: list[str]
     size_change: int
     summary: str = ""
-    restorable: bool = True  # False once it is older than the last few that are kept
+    restorable: bool = True  # False only for versions an older Session Sync pruned
+    revision_path: str | None = None  # its main Live Set in Past Revisions/
 
 
 class Repository:
@@ -103,6 +113,8 @@ class Repository:
         self.author = author
         self.state = state
         self.hash_cache = HashCache(state.db_path)
+        self._known_cache: tuple[int, dict[str, str]] | None = None
+        self.last_plan = None
 
     # --- setting up ----------------------------------------------------
 
@@ -206,12 +218,67 @@ class Repository:
         return Manifest.from_json(self.storage.read_manifest(version))
 
     def scan(self) -> dict[str, FileEntry]:
-        """Hash every tracked file in the project as it is right now."""
-        return build_file_map(
+        """What a push would send right now, keyed by its path in the shared copy.
+
+        For Ableton that is Consolidate's selection: the files the Sets use
+        (including ones copied in from outside), not every file in the folder.
+        """
+        plan = self.plan_push(rewrite=False)
+        if plan is None:
+            return build_file_map(
+                self.project_root,
+                self.adapter.enumerate_tracked_files(self.project_root),
+                self.hash_cache,
+            )
+        return self._as_shared(self._file_map(plan.files))
+
+    def plan_push(self, *, rewrite: bool = False):
+        """Run Consolidate. None when the adapter has no such step."""
+        plan_push = getattr(self.adapter, "plan_push", None)
+        if plan_push is None:
+            return None
+        plan = plan_push(
             self.project_root,
-            self.adapter.enumerate_tracked_files(self.project_root),
-            self.hash_cache,
+            known=self._known_paths(),
+            hash_file=self.hash_cache.hash_file,
+            rewrite=rewrite,
         )
+        self.last_plan = plan
+        return plan
+
+    def _file_map(self, sources: dict[str, Path]) -> dict[str, FileEntry]:
+        return {
+            rel: FileEntry(path=rel, sha256=self.hash_cache.hash_file(src), size=src.stat().st_size)
+            for rel, src in sources.items()
+        }
+
+    def _as_shared(self, files: dict[str, FileEntry]) -> dict[str, FileEntry]:
+        """A Set this computer pushed (and Consolidate rewrote) counts as unchanged."""
+        base = self.base_files()
+        for path, entry in list(files.items()):
+            pushed = base.get(path)
+            if pushed is not None and pushed.source_sha256 == entry.sha256:
+                files[path] = pushed
+        return files
+
+    def _known_paths(self) -> dict[str, str]:
+        """{path: hash} for every file any version has held, newest wins."""
+        try:
+            versions = self.storage.list_versions()
+        except Exception:
+            return {}
+        latest = versions[-1] if versions else 0
+        if self._known_cache and self._known_cache[0] == latest:
+            return self._known_cache[1]
+        known: dict[str, str] = {}
+        for version in versions:
+            try:
+                manifest = self.read_manifest(version)
+            except (FileNotFoundError, ValueError, KeyError):
+                continue
+            known.update({p: e.sha256 for p, e in manifest.files.items()})
+        self._known_cache = (latest, known)
+        return known
 
     def base_files(self) -> dict[str, FileEntry]:
         """The project as it was at the version this copy started from."""
@@ -261,6 +328,7 @@ class Repository:
             upload_bytes=upload_bytes,
             already_stored_bytes=project_bytes - upload_bytes,
             active_sessions=active_sessions(self.storage, exclude=self._session_key()),
+            plan=self.last_plan,
         )
 
     def history(self) -> list[VersionSummary]:
@@ -284,6 +352,7 @@ class Repository:
                     size_change=manifest.total_bytes - previous_bytes,
                     summary=describe_version(previous_manifest, manifest),
                     restorable=version not in pruned,
+                    revision_path=(manifest.revision or {}).get("path"),
                 )
             )
             previous, previous_bytes = manifest.files, manifest.total_bytes
@@ -360,7 +429,7 @@ class Repository:
         """Keep the shared copy's "who is doing what" note true. Returns the state.
 
         Live open on this song  -> "working".
-        Changes not put back    -> "unpushed" (stays until put back or discarded).
+        Changes not pushed      -> "unpushed" (stays until pushed or discarded).
         Neither                 -> the note is removed.
         """
         from sessionsync.core.session import build_session, new_session_key
@@ -415,7 +484,35 @@ class Repository:
         if remote_version != self.base_version:
             raise StalePushError(self.base_version, remote_version)
 
-        files = self.scan()
+        # Consolidate first: what the Sets use, outside files copied in, and the
+        # Sets re-pointed where needed. Any reason it is unsafe stops the push here,
+        # before anything is uploaded.
+        plan = self.plan_push(rewrite=True)
+        scratch = Path(tempfile.mkdtemp(prefix="sessionsync-push-"))
+        try:
+            if plan is not None:
+                plan.check()
+                files, sources = self._consolidated_files(plan, scratch)
+            else:
+                files = self.scan()
+                sources = {e.sha256: self.project_root / e.path for e in files.values()}
+            return self._publish(files, sources, plan, note, remote_version)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def _consolidated_files(self, plan, scratch: Path) -> tuple[dict[str, FileEntry], dict[str, Path]]:
+        files = self._file_map(plan.files)
+        sources = {files[rel].sha256: src for rel, src in plan.files.items()}
+        for n, (rel, data) in enumerate(sorted(plan.rewritten.items())):
+            sha = hashlib.sha256(data).hexdigest()
+            temp = scratch / f"{n}.als"
+            temp.write_bytes(data)
+            local = files[rel]
+            files[rel] = FileEntry(path=rel, sha256=sha, size=len(data), source_sha256=local.sha256)
+            sources[sha] = temp
+        return self._as_shared(files), sources
+
+    def _publish(self, files, sources, plan, note, remote_version) -> PushResult:
         diff = diff_file_maps(self.base_files(), files)
         if not diff.has_changes:
             raise NothingToPushError("Nothing has changed since your last push.")
@@ -426,11 +523,22 @@ class Repository:
         already_there = self.storage.existing_objects(wanted)
         uploaded_objects = uploaded_bytes = 0
         for entry in _one_file_per_hash(files, skip=already_there):
-            self.storage.upload_object(entry.sha256, self.project_root / entry.path)
+            self.storage.upload_object(entry.sha256, sources[entry.sha256])
             uploaded_objects += 1
             uploaded_bytes += entry.size
 
         new_version = remote_version + 1
+        revision = None
+        main = plan.main_set if plan is not None else None
+        if main and main in files:
+            entry = files[main]
+            revision = {
+                "path": past_revision_name(new_version, self.author, note, Path(main).stem),
+                "sha256": entry.sha256,
+                "size": entry.size,
+                "set": main,
+                "project_marker": getattr(self.adapter, "project_marker", None),
+            }
         previous_tracks = (
             self.read_manifest(remote_version).tracks if remote_version else None
         )
@@ -448,6 +556,7 @@ class Repository:
             files=files,
             summary=summary,
             tracks=new_tracks,
+            revision=revision,
         )
         try:
             # Publishing the manifest is the commit point — one winner per version.
@@ -501,7 +610,7 @@ class Repository:
         for path, entry in sorted(target.files.items()):
             local = self.project_root / path
             if local.exists():
-                if self.hash_cache.hash_file(local) == entry.sha256:
+                if entry.matches(self.hash_cache.hash_file(local)):
                     continue  # already have exactly this content
                 if path not in diff.added and path not in diff.modified:
                     continue  # locally edited, and this version does not change it
@@ -509,24 +618,92 @@ class Repository:
             self.storage.download_object(entry.sha256, local)
             downloaded += entry.size
 
-        for path in diff.deleted:
-            self._to_trash(self.project_root / path, trash)
+        # Files the new version no longer uses stay on this computer: an older
+        # revision may need them, and they were never anyone else's to remove.
+        downloaded += self._fetch_past_revisions()
 
         self.state.base_version = target_version
         self.state.baseline = None
         return PullResult(from_version, target_version, diff, downloaded)
 
+    def _fetch_past_revisions(self) -> int:
+        """Bring down every Past Revisions Live Set this computer lacks (they are small)."""
+        fetched = 0
+        marker = getattr(self.adapter, "project_marker", None)
+        if marker:
+            (self.project_root / marker).mkdir(parents=True, exist_ok=True)
+        for version in self.storage.list_versions():
+            try:
+                rev = self.read_manifest(version).revision
+            except (FileNotFoundError, ValueError, KeyError):
+                continue
+            if not rev:
+                continue
+            local = self.project_root / rev["path"]
+            if local.exists():
+                continue
+            try:
+                self.storage.download_object(rev["sha256"], local)
+                fetched += rev["size"]
+            except (FileNotFoundError, NotReadyError):
+                continue  # still arriving; the next pull picks it up
+        return fetched
+
+    # --- going back -----------------------------------------------------
+
+    def open_revision(self, version: int) -> Path:
+        """Get an old revision ready to open in Live. Returns the Live Set to open.
+
+        Usually that is Past Revisions/Rev N ….als inside this project: anything
+        the revision uses that this computer lacks is fetched first, and nothing
+        here is overwritten. If a file the revision needs has different content
+        here now, the revision is built as a separate copy beside the project.
+        """
+        if version not in self.storage.list_versions():
+            raise ValueError(f"There is no version {version}.")
+        manifest = self.read_manifest(version)
+        rev = manifest.revision
+        needed = {
+            path: entry
+            for path, entry in manifest.files.items()
+            if not path.lower().endswith(".als")
+        }
+        missing, conflicts = [], []
+        for path, entry in sorted(needed.items()):
+            local = self.project_root / path
+            if not local.exists():
+                missing.append(entry)
+            elif not entry.matches(self.hash_cache.hash_file(local)):
+                if not path.startswith("Ableton Project Info/"):
+                    conflicts.append(path)
+
+        if rev and not conflicts:
+            for entry in missing:
+                self.storage.download_object(entry.sha256, self.project_root / entry.path)
+            target = self.project_root / rev["path"]
+            if not target.exists():
+                self.storage.download_object(rev["sha256"], target)
+            return target
+
+        side = _free_name(self.project_root.parent / f"{self.project_root.name} (Rev {version})")
+        self.restore_copy(version, side)
+        main = (rev or {}).get("set")
+        if main and (side / main).exists():
+            return side / main
+        sets = sorted(side.glob("*.als"))
+        return sets[0] if sets else side
+
     # --- being behind ---------------------------------------------------
 
     def catch_up(self, aside_parent: Path | None = None) -> "CatchUp":
-        """Someone put back first. Keep my version, bring theirs, say who did what.
+        """Someone pushed first. Keep my version, bring theirs, say who did what.
 
         1. My whole project is copied aside (a clone on APFS, so it costs little).
         2. Their latest version replaces mine in the project; anything replaced also
            goes to the local trash.
         3. My Live Set is kept next to theirs as "<name> (mine).als", so both can be
            opened and tracks dragged across.
-        Nothing is put back: that stays a deliberate step.
+        Nothing is pushed: that stays a deliberate step.
         """
         target = self.remote_version()
         if target == self.base_version:
@@ -573,7 +750,7 @@ class Repository:
         at_risk = []
         for path, incoming in target.files.items():
             local_entry = local.get(path)
-            if local_entry is None or local_entry.sha256 == incoming.sha256:
+            if local_entry is None or incoming.matches(local_entry.sha256):
                 continue
             base_entry = base.get(path)
             if base_entry is not None and local_entry.sha256 != base_entry.sha256:
@@ -673,6 +850,25 @@ def _one_file_per_hash(files: dict[str, FileEntry], *, skip: set[str]) -> list[F
         seen.add(entry.sha256)
         unique.append(entry)
     return unique
+
+
+def past_revision_name(version: int, author: dict | None, note: str | None, song: str) -> str:
+    """"Past Revisions/Rev 0007 - 2026-11-06 - Stefan - new chorus.als"."""
+    who = (author or {}).get("name") or ""
+    parts = [f"Rev {version:04d}", datetime.now().strftime("%Y-%m-%d")]
+    if who:
+        parts.append(_filename_safe(who, 30))
+    if note and note.strip():
+        parts.append(_filename_safe(note, 40))
+    elif song:
+        parts.append(_filename_safe(song, 40))
+    return f"Past Revisions/{' - '.join(p for p in parts if p)}.als"
+
+
+def _filename_safe(text: str, limit: int) -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', " ", text)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
+    return cleaned[:limit].rstrip(" .")
 
 
 def _describe(storage: StorageProvider) -> str:

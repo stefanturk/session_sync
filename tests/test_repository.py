@@ -3,7 +3,7 @@ import pytest
 from sessionsync.adapters.ableton.adapter import AbletonAdapter
 from sessionsync.core.errors import NothingToPushError, NotAProjectError, StalePushError
 from sessionsync.core.repository import Repository
-from tests.conftest import ALICE, BOB, write_project
+from tests.conftest import ALICE, BOB, write_project, record, als_marked
 
 
 class TestCreate:
@@ -59,16 +59,16 @@ class TestPush:
         assert manifest.note == "Initial version"
 
     def test_a_second_push_only_uploads_what_changed(self, alice, project):
-        (project / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"g" * 5000)
+        record(project, "Samples/Recorded/Guitar.wav", b"g" * 5000)
 
         result = alice.push(note="Guitar")
 
         assert result.version == 2
-        assert result.uploaded_objects == 1
-        assert result.uploaded_bytes == 5000
+        assert result.uploaded_objects == 2  # the take, and the Live Set that now uses it
+        assert result.uploaded_bytes == 5000 + (project / "My Song.als").stat().st_size
 
     def test_unchanged_audio_is_not_uploaded_again(self, alice, project, remote):
-        (project / "My Song.als").write_bytes(b"edited set")
+        (project / "My Song.als").write_bytes(als_marked(b"edited set"))
 
         result = alice.push(note="Arrangement tweak")
 
@@ -98,7 +98,7 @@ class TestPush:
         assert "Samples/Recorded/Vocal.wav" in alice.read_manifest(1).files
 
     def test_pushing_advances_this_computers_base_version(self, alice, project):
-        (project / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"g")
+        record(project, "Samples/Recorded/Guitar.wav", b"g")
 
         alice.push(note="Guitar")
 
@@ -123,7 +123,7 @@ class TestClone:
 
 class TestPull:
     def test_brings_in_another_persons_recordings(self, alice, bob, project):
-        (project / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"guitar take")
+        record(project, "Samples/Recorded/Guitar.wav", b"guitar take")
         alice.push(note="Guitar")
 
         result = bob.pull()
@@ -137,32 +137,32 @@ class TestPull:
         assert result.to_version == 1
         assert not result.diff.has_changes
 
-    def test_a_file_someone_else_deleted_is_moved_to_the_local_trash_not_erased(
+    def test_a_file_the_new_version_no_longer_uses_stays_on_bobs_computer(
         self, alice, bob, project
     ):
-        (project / "Samples" / "Recorded" / "Vocal.wav").unlink()
+        (project / "My Song.als").write_bytes(als_marked(b"no vocal", samples=()))
         alice.push(note="Dropped the vocal")
 
         bob.pull()
 
-        assert not (bob.project_root / "Samples" / "Recorded" / "Vocal.wav").exists()
-        recovered = list(bob.state.trash_dir.rglob("Vocal.wav"))
-        assert recovered and recovered[0].read_bytes() == b"vocal audio"
+        # an older revision still uses it, so it is never removed
+        assert (bob.project_root / "Samples" / "Recorded" / "Vocal.wav").read_bytes() == b"vocal audio"
+        assert "Samples/Recorded/Vocal.wav" not in bob.read_manifest(2).files
 
     def test_a_file_someone_else_changed_is_kept_in_the_trash_before_being_replaced(
         self, alice, bob, project
     ):
-        (project / "My Song.als").write_bytes(b"alices new arrangement")
+        (project / "My Song.als").write_bytes(als_marked(b"alices new arrangement"))
         alice.push(note="Arrangement")
 
         bob.pull()
 
-        assert (bob.project_root / "My Song.als").read_bytes() == b"alices new arrangement"
+        assert (bob.project_root / "My Song.als").read_bytes() == als_marked(b"alices new arrangement")
         assert list(bob.state.trash_dir.rglob("My Song.als"))
 
     def test_untracked_files_bob_added_himself_are_left_alone(self, alice, bob, project):
         (bob.project_root / "notes.txt").write_text("my ideas")
-        (project / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"guitar")
+        record(project, "Samples/Recorded/Guitar.wav", b"guitar")
         alice.push(note="Guitar")
 
         bob.pull()
@@ -174,9 +174,9 @@ class TestStalePush:
     def test_the_second_person_to_push_from_the_same_version_is_stopped(
         self, alice, bob, project
     ):
-        (project / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"alice guitar")
+        record(project, "Samples/Recorded/Guitar.wav", b"alice guitar")
         alice.push(note="Alice guitar")
-        (bob.project_root / "Samples" / "Recorded" / "Bass.wav").write_bytes(b"bob bass")
+        record(bob.project_root, "Samples/Recorded/Bass.wav", b"bob bass")
 
         with pytest.raises(StalePushError) as excinfo:
             bob.push(note="Bob bass")
@@ -184,9 +184,9 @@ class TestStalePush:
         assert "Pull" in str(excinfo.value)
 
     def test_a_blocked_push_leaves_the_remote_untouched(self, alice, bob, project):
-        (project / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"alice guitar")
+        record(project, "Samples/Recorded/Guitar.wav", b"alice guitar")
         alice.push(note="Alice guitar")
-        (bob.project_root / "Samples" / "Recorded" / "Bass.wav").write_bytes(b"bob bass")
+        record(bob.project_root, "Samples/Recorded/Bass.wav", b"bob bass")
 
         with pytest.raises(StalePushError):
             bob.push(note="Bob bass")
@@ -195,9 +195,9 @@ class TestStalePush:
         assert alice.read_manifest(2).author == ALICE
 
     def test_a_blocked_push_leaves_bobs_own_recordings_in_place(self, alice, bob, project):
-        (project / "My Song.als").write_bytes(b"alice edit")
+        (project / "My Song.als").write_bytes(als_marked(b"alice edit"))
         alice.push(note="Alice")
-        (bob.project_root / "Samples" / "Recorded" / "Bass.wav").write_bytes(b"bob bass")
+        record(bob.project_root, "Samples/Recorded/Bass.wav", b"bob bass")
 
         with pytest.raises(StalePushError):
             bob.push(note="Bob bass")
@@ -205,11 +205,10 @@ class TestStalePush:
         assert (bob.project_root / "Samples" / "Recorded" / "Bass.wav").read_bytes() == b"bob bass"
 
     def test_after_pulling_bob_can_push_his_work(self, alice, bob, project):
-        (project / "My Song.als").write_bytes(b"alice edit")
+        (project / "My Song.als").write_bytes(als_marked(b"alice edit"))
         alice.push(note="Alice")
-        (bob.project_root / "Samples" / "Recorded" / "Bass.wav").write_bytes(b"bob bass")
-
         bob.pull()
+        record(bob.project_root, "Samples/Recorded/Bass.wav", b"bob bass")
         result = bob.push(note="Bob bass")
 
         assert result.version == 3
@@ -225,7 +224,7 @@ class TestStatus:
         assert not status.has_local_changes
 
     def test_reports_local_work_that_has_not_been_pushed(self, alice, project):
-        (project / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"guitar")
+        record(project, "Samples/Recorded/Guitar.wav", b"guitar")
 
         status = alice.status()
 
@@ -233,7 +232,7 @@ class TestStatus:
         assert status.diff.added == ["Samples/Recorded/Guitar.wav"]
 
     def test_tells_the_other_person_they_are_behind(self, alice, bob, project):
-        (project / "My Song.als").write_bytes(b"alice edit")
+        (project / "My Song.als").write_bytes(als_marked(b"alice edit"))
         alice.push(note="Alice")
 
         status = bob.status()
@@ -242,9 +241,9 @@ class TestStatus:
         assert status.versions_behind == 1
 
     def test_being_behind_with_local_work_is_the_blocked_state(self, alice, bob, project):
-        (project / "My Song.als").write_bytes(b"alice edit")
+        (project / "My Song.als").write_bytes(als_marked(b"alice edit"))
         alice.push(note="Alice")
-        (bob.project_root / "Samples" / "Recorded" / "Bass.wav").write_bytes(b"bob bass")
+        record(bob.project_root, "Samples/Recorded/Bass.wav", b"bob bass")
 
         status = bob.status()
 
@@ -253,17 +252,18 @@ class TestStatus:
         assert status.has_local_changes
 
     def test_predicts_what_a_push_would_upload(self, alice, project):
-        (project / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"g" * 4000)
+        record(project, "Samples/Recorded/Guitar.wav", b"g" * 4000)
 
         status = alice.status()
 
-        assert status.upload_bytes == 4000
-        assert status.already_stored_bytes == status.project_bytes - 4000
+        new = 4000 + (project / "My Song.als").stat().st_size  # the take and the Set using it
+        assert status.upload_bytes == new
+        assert status.already_stored_bytes == status.project_bytes - new
 
 
 class TestHistory:
     def test_lists_previous_sessions_newest_first(self, alice, project):
-        (project / "My Song.als").write_bytes(b"v2")
+        (project / "My Song.als").write_bytes(als_marked(b"v2"))
         alice.push(note="Guitar overdubs")
 
         history = alice.history()
@@ -273,13 +273,15 @@ class TestHistory:
         assert history[0].author["name"] == "Alice"
 
     def test_each_entry_summarises_what_changed(self, alice, project):
-        (project / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"g" * 100)
+        set_before = (project / "My Song.als").stat().st_size
+        record(project, "Samples/Recorded/Guitar.wav", b"g" * 100)
+        set_growth = (project / "My Song.als").stat().st_size - set_before
         alice.push(note="Guitar")
 
         latest = alice.history()[0]
 
         assert latest.added == ["Samples/Recorded/Guitar.wav"]
-        assert latest.size_change == 100
+        assert latest.size_change == 100 + set_growth
 
 
 class TestReconstructionFidelity:
@@ -303,7 +305,7 @@ class TestReconstructionFidelity:
 
     def test_a_project_with_accented_filenames_round_trips(self, tmp_path, remote):
         project = write_project(tmp_path / "alice" / "My Song")
-        (project / "Samples" / "Recorded" / "Björk Take.wav").write_bytes(b"take")
+        record(project, "Samples/Recorded/Björk Take.wav", b"take")
         repo = Repository.create(project, remote, adapter=AbletonAdapter(), author=ALICE)
         repo.push(note="v1")
 

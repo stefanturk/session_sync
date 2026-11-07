@@ -2,7 +2,7 @@ import pytest
 from typer.testing import CliRunner
 
 from sessionsync.cli import app
-from tests.conftest import write_project
+from tests.conftest import write_project, record, als_marked
 
 runner = CliRunner()
 
@@ -64,7 +64,7 @@ class TestStatus:
     def test_warns_loudly_when_someone_else_has_pushed(self, synced, remote_dir, tmp_path):
         clone = tmp_path / "bob" / "My Song"
         run("clone", remote_dir, clone)
-        (synced / "My Song.als").write_bytes(b"alice edit")
+        (synced / "My Song.als").write_bytes(als_marked(b"alice edit"))
         run("push", "--project", synced, "--note", "Alice")
 
         result = run("status", "--project", clone)
@@ -73,7 +73,7 @@ class TestStatus:
         assert "Pull latest" in result.stdout
 
     def test_lists_unpushed_work_with_its_upload_size(self, synced):
-        (synced / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"g" * 2048)
+        record(synced, "Samples/Recorded/Guitar.wav", b"g" * 2048)
 
         result = run("status", "--project", synced)
 
@@ -92,20 +92,20 @@ class TestStatus:
 
 class TestPush:
     def test_reports_the_new_version_and_what_was_uploaded(self, synced):
-        (synced / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"g" * 1024)
+        record(synced, "Samples/Recorded/Guitar.wav", b"g" * 1024)
 
         result = run("push", "--project", synced, "--note", "Guitar")
 
         assert result.exit_code == 0
         assert "v2" in result.stdout
-        assert "1.0 KB" in result.stdout
+        assert "Uploaded: 1." in result.stdout  # the 1 KB take plus the Set that now uses it
 
     def test_a_stale_push_is_refused_with_an_explanation(self, synced, remote_dir, tmp_path):
         clone = tmp_path / "bob" / "My Song"
         run("clone", remote_dir, clone)
-        (synced / "My Song.als").write_bytes(b"alice edit")
+        (synced / "My Song.als").write_bytes(als_marked(b"alice edit"))
         run("push", "--project", synced, "--note", "Alice")
-        (clone / "Samples" / "Recorded" / "Bass.wav").write_bytes(b"bass")
+        record(clone, "Samples/Recorded/Bass.wav", b"bass")
 
         result = run("push", "--project", clone, "--note", "Bob bass")
 
@@ -132,7 +132,7 @@ class TestPullAndClone:
     def test_pull_reports_what_arrived(self, synced, remote_dir, tmp_path):
         clone = tmp_path / "bob" / "My Song"
         run("clone", remote_dir, clone)
-        (synced / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"guitar")
+        record(synced, "Samples/Recorded/Guitar.wav", b"guitar")
         run("push", "--project", synced, "--note", "Guitar")
 
         result = run("pull", "--project", clone)
@@ -153,7 +153,7 @@ class TestSession:
     ):
         clone = tmp_path / "bob" / "My Song"
         run("clone", remote_dir, clone)
-        (synced / "My Song.als").write_bytes(b"alice edit")
+        (synced / "My Song.als").write_bytes(als_marked(b"alice edit"))
         run("push", "--project", synced, "--note", "Alice")
 
         result = run("session", "start", "--project", clone)
@@ -163,7 +163,7 @@ class TestSession:
 
     def test_review_lists_what_you_recorded_this_session(self, synced):
         run("session", "start", "--project", synced)
-        (synced / "Samples" / "Recorded" / "Guitar.wav").write_bytes(b"guitar")
+        record(synced, "Samples/Recorded/Guitar.wav", b"guitar")
 
         result = run("review", "--project", synced)
 
@@ -173,7 +173,7 @@ class TestSession:
 
 class TestHistory:
     def test_reads_like_a_list_of_sessions_not_a_git_log(self, synced):
-        (synced / "My Song.als").write_bytes(b"v2")
+        (synced / "My Song.als").write_bytes(als_marked(b"v2"))
         run("push", "--project", synced, "--note", "Guitar overdubs")
 
         result = run("history", "--project", synced)
@@ -189,7 +189,7 @@ class TestTimes:
     def test_history_shows_times_in_your_own_timezone(self, synced):
         from datetime import datetime
 
-        (synced / "My Song.als").write_bytes(b"v2")
+        (synced / "My Song.als").write_bytes(als_marked(b"v2"))
         run("push", "--project", synced, "--note", "Late night")
 
         result = run("history", "--project", synced)
@@ -199,7 +199,7 @@ class TestTimes:
 
 
 class TestMediaWarnings:
-    def test_status_warns_when_audio_lives_outside_the_project(self, synced, tmp_path):
+    def test_status_says_outside_audio_will_be_copied_in(self, synced, tmp_path):
         import gzip
 
         stray = tmp_path / "Downloads" / "Borrowed Loop.wav"
@@ -216,8 +216,25 @@ class TestMediaWarnings:
 
         result = run("status", "--project", synced)
 
-        assert "Collect All and Save" in result.stdout
+        assert "copied into Samples/Imported on Push" in result.stdout
         assert "Borrowed Loop.wav" in result.stdout
+
+    def test_push_dry_run_shows_what_is_left_behind_and_changes_nothing(self, synced):
+        (synced / "Samples" / "Recorded" / "Old Take.wav").write_bytes(b"x" * 3000)
+
+        result = run("push", "--project", synced, "--dry-run")
+
+        assert result.exit_code == 0, result.output
+        assert "Not used by any Live Set (1" in result.stdout
+        assert "Old Take.wav" in result.stdout
+        assert "Pushed" not in result.stdout
+
+    def test_open_rev_gets_an_old_revision_ready(self, synced):
+        result = run("open-rev", "1", "--project", synced, "--no-open")
+
+        assert result.exit_code == 0, result.output
+        assert "Rev 1 is ready" in result.stdout
+        assert "Past Revisions" in result.stdout
 
 
 class TestWho:

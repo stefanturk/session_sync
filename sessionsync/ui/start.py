@@ -50,7 +50,7 @@ class StartScreen(QWidget):
         wordmark.setAlignment(Qt.AlignCenter)
         column.addWidget(wordmark)
 
-        tagline = QLabel("Get it, work on it, put it back — for Ableton projects.")
+        tagline = QLabel("Pull, work, push — for Ableton projects.")
         tagline.setObjectName("tagline")
         tagline.setAlignment(Qt.AlignCenter)
         column.addWidget(tagline)

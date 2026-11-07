@@ -173,14 +173,14 @@ class TestValidationUsesIt:
     def test_a_collected_project_gets_no_media_warning(self, adapter, collected):
         warnings = adapter.validate_project(collected).warnings
 
-        assert not any("Collect All and Save" in w for w in warnings)
+        assert not any("Push copies them" in w for w in warnings)
 
-    def test_an_uncollected_project_is_told_to_collect_all_and_save(
+    def test_an_uncollected_project_is_told_push_copies_the_samples_in(
         self, adapter, uncollected
     ):
         warnings = adapter.validate_project(uncollected).warnings
 
-        assert any("Collect All and Save" in w for w in warnings)
+        assert any("Push copies them" in w for w in warnings)
         assert any("1 sample" in w for w in warnings)
 
     def test_the_warning_names_a_few_of_the_files_so_it_is_actionable(

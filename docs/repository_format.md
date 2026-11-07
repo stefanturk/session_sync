@@ -51,16 +51,32 @@ One per version, immutable once published:
   "note": "Guitar overdubs",
   "summary": "Added Sax · Changed Drums",
   "tracks": {"Drums": "9f2c01ab33de", "Sax": "5be1c0a47710"},
+  "revision": {"path": "Past Revisions/Rev 0024 - 2026-11-06 - Bob - Guitar overdubs.als",
+               "sha256": "…", "size": 97412, "set": "My Song.als",
+               "project_marker": "Ableton Project Info"},
   "files": {
-    "My Song.als": {"sha256": "…", "size": 97407},
-    "Samples/Recorded/Sax 0051.aif": {"sha256": "…", "size": 20066304}
+    "My Song.als": {"sha256": "…", "size": 97412, "source_sha256": "…"},
+    "Samples/Recorded/Sax 0051.aif": {"sha256": "…", "size": 20066304},
+    "Samples/Imported/Room Mic.wav": {"sha256": "…", "size": 51200044}
   }
 }
 ```
 
-`summary` and `tracks` are optional: a one-line description and a per-track
-content fingerprint written at push time (older manifests lack them, and readers
-ignore fields they do not know).
+`summary`, `tracks` and `revision` are optional (older manifests lack them, and
+readers ignore fields they do not know):
+
+- `summary` / `tracks`: a one-line description and a per-track content
+  fingerprint written at push time.
+- `revision`: this push's main Set, saved under `Past Revisions/`. It is not in
+  `files`, so it never shows up as a change; it shares its object with the main
+  Set's entry.
+- `source_sha256` on a file: Consolidate rewrote this Live Set for sharing (its
+  samples re-pointed into the project). The value is the hash of the untouched
+  Set on the computer that pushed it, which counts as the same content.
+
+For Ableton, `files` is what Consolidate selected, not the whole folder: the Sets,
+the audio and Max devices they use (outside files under `Samples/Imported/`), and
+small non-audio files. See `ableton_notes.md`.
 
 A manifest lists the *complete* project, not a delta — so any version can be
 reconstructed on its own, and identical audio across versions is stored once.
@@ -94,6 +110,29 @@ version with some unreferenced objects — wasted space, never a broken project.
 
 Unreferenced objects are never deleted automatically. Garbage collection is a
 later, explicit, grace-period-protected operation.
+
+## The shared-folder layout (`MasterFolderStorage`)
+
+The Google Drive shared copy uses the same manifests, but keeps the project's
+files visible at their own paths instead of in `objects/`, so it opens in Live:
+
+```
+My Song/
+  My Song.als                   the current revision, as Consolidate prepared it
+  Samples/…                     every file any revision has used
+  Past Revisions/Rev 0001 … .als
+  .sessionsync/manifests/       v000001.json + v000001.committed …
+  .sessionsync/history/objects/ old content of files that were overwritten
+  .sessionsync/staging/         objects of a push in progress
+```
+
+- A file a newer revision no longer uses is **left in place**, never moved or
+  deleted, so every Past Revision opens straight from the folder.
+- Overwritten content goes to `history/objects` and is kept forever (there is no
+  pruning any more; `retention.json` only records what an older Session Sync
+  pruned).
+- Staged files are **moved** into place, not copied: in a Google Drive folder a
+  move is a rename, while a copy would upload the audio a second time.
 
 ## Sessions (advisory)
 

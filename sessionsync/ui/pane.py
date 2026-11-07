@@ -49,7 +49,7 @@ from sessionsync.core.errors import (
 )
 from sessionsync.core.session import HEARTBEAT_SECONDS
 from sessionsync.ui import theme
-from sessionsync.ui.dialogs import ask_put_back, describe_catch_up
+from sessionsync.ui.dialogs import ask_push, describe_catch_up
 from sessionsync.ui.engine import Engine, Snapshot
 from sessionsync.ui.notify import notify
 from sessionsync.ui.presenter import human_size, local_time, notifications, screen
@@ -84,6 +84,7 @@ class ProjectPane(QWidget):
     request_review = Signal()
     request_history = Signal()
     request_restore = Signal(int, str)
+    request_open_revision = Signal(int)
     request_catch_up = Signal()
 
     #: level, state_label — so the shell can colour the tab and title the window
@@ -289,6 +290,7 @@ class ProjectPane(QWidget):
         self.request_review.connect(self.engine.review)
         self.request_history.connect(self.engine.history)
         self.request_restore.connect(self.engine.restore)
+        self.request_open_revision.connect(self.engine.open_revision)
         self.request_catch_up.connect(self.engine.catch_up)
 
         self.engine.snapshot_ready.connect(self._show)
@@ -388,15 +390,11 @@ class ProjectPane(QWidget):
 
     def _show_media(self, snapshot: Snapshot) -> None:
         parts = []
-        if snapshot.media_outside:
-            parts.append(
-                f"⚠  {len(snapshot.media_outside)} audio file(s) live outside this project "
-                "folder and would not reach your collaborators — run Collect All and Save "
-                "in Ableton."
-            )
+        for problem in snapshot.problems:
+            parts.append(f"✕  {problem}")
         if snapshot.media_missing:
             parts.append(
-                f"⚠  {len(snapshot.media_missing)} referenced file(s) cannot be found on "
+                f"⚠  {len(snapshot.media_missing)} file(s) the song uses cannot be found on "
                 "this Mac at all."
             )
         self.media_label.setText("  ".join(parts))
@@ -460,9 +458,9 @@ class ProjectPane(QWidget):
         answer = QMessageBox.question(
             self,
             "Catch up",
-            "Someone put back a newer version while you were working.\n\n"
+            "Someone pushed a newer version while you were working.\n\n"
             "I will save a full copy of YOUR version next to this project first, then "
-            "bring theirs in. Nothing is put back until you say so.",
+            "bring theirs in. Nothing is pushed until you say so.",
             QMessageBox.Ok | QMessageBox.Cancel,
         )
         if answer == QMessageBox.Ok:
@@ -470,12 +468,9 @@ class ProjectPane(QWidget):
 
     def _ask_for_note_and_push(self) -> None:
         snapshot = self.snapshot
-        note = ask_put_back(
-            self,
-            self.project_name,
-            snapshot.media_outside if snapshot else [],
-            snapshot.media_missing if snapshot else [],
-        )
+        if snapshot is None:
+            return
+        note = ask_push(self, snapshot)
         if note is not None:
             self.request_push.emit(note)
 
@@ -484,7 +479,7 @@ class ProjectPane(QWidget):
     def _operation_done(self, name: str, result) -> None:
         if name == "push":
             self._say(
-                f"Put back as v{result.version} — {human_size(result.uploaded_bytes)} sent.",
+                f"Pushed as v{result.version} — {human_size(result.uploaded_bytes)} sent.",
                 15000,
             )
         elif name == "pull":
@@ -498,11 +493,14 @@ class ProjectPane(QWidget):
         elif name == "start_session":
             self._say("Marked as working. Go and make some noise.", 8000)
         elif name == "end_session":
-            self._say("Done. Nothing was put back.", 8000)
+            self._say("Done. Nothing was pushed.", 8000)
         elif name == "review":
             self._show_review(result)
         elif name == "history":
             self._show_history(result)
+        elif name == "open_revision":
+            self._say(f"Opening {result.name} in Live.", 15000)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(result)))
         elif name == "restore":
             self._say(f"Restored a copy to {result}.", 15000)
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.parent)))
@@ -518,7 +516,7 @@ class ProjectPane(QWidget):
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
         if isinstance(error, (StalePushError, ProjectBehindError)):
-            box.setText("Someone else put back first.")
+            box.setText("Someone else pushed first.")
             box.setInformativeText(str(error))
         else:
             box.setText("That did not work.")
@@ -578,8 +576,13 @@ class ProjectPane(QWidget):
             if entry.note:
                 lines.append(f"        \u201c{entry.note}\u201d")
         chosen = show_history(self, "\n".join(lines) or "No versions yet.", entries)
-        if chosen is not None:
-            self.restore_version(chosen)
+        if chosen is None:
+            return
+        action, version = chosen
+        if action == "open":
+            self.request_open_revision.emit(version)
+        else:
+            self.restore_version(version)
 
     def restore_version(self, version: int) -> None:
         """Rebuild an old version in a new folder beside the project."""
@@ -641,10 +644,11 @@ def show_text(parent, title: str, text: str) -> None:
     dialog.exec()
 
 
-def show_history(parent, text: str, entries) -> int | None:
-    """The history text plus a way to bring a version back as a separate copy.
+def show_history(parent, text: str, entries) -> tuple[str, int] | None:
+    """The history text plus ways to go back to an old revision.
 
-    Returns the version chosen for restoring, or None.
+    Returns ("open", version) to open it in Live, ("restore", version) to build
+    it as a separate copy, or None.
     """
     dialog = QDialog(parent)
     dialog.setWindowTitle("Project History")
@@ -657,23 +661,24 @@ def show_history(parent, text: str, entries) -> int | None:
     layout.addWidget(view)
 
     buttons = QDialogButtonBox(QDialogButtonBox.Close)
+    open_rev = buttons.addButton("Open in Live\u2026", QDialogButtonBox.ActionRole)
     restore = buttons.addButton("Restore a Copy\u2026", QDialogButtonBox.ActionRole)
     buttons.rejected.connect(dialog.reject)
     layout.addWidget(buttons)
 
-    picked: list[int] = []
+    usable = [e for e in entries if getattr(e, "restorable", True)]
+    picked: list[tuple[str, int]] = []
 
-    def ask() -> None:
-        entries = [e for e in entries if getattr(e, "restorable", True)]
-        labels = [f"v{e.version} \u2014 {e.summary or 'no summary'}" for e in entries]
-        label, ok = QInputDialog.getItem(
-            dialog, "Restore a Copy", "Which version?", labels, 0, False
-        )
+    def ask(action: str, title: str) -> None:
+        labels = [f"v{e.version} \u2014 {e.summary or 'no summary'}" for e in usable]
+        label, ok = QInputDialog.getItem(dialog, title, "Which version?", labels, 0, False)
         if ok:
-            picked.append(entries[labels.index(label)].version)
+            picked.append((action, usable[labels.index(label)].version))
             dialog.accept()
 
-    restore.clicked.connect(ask)
-    restore.setEnabled(any(getattr(e, 'restorable', True) for e in entries))
+    open_rev.clicked.connect(lambda: ask("open", "Open an Old Revision in Live"))
+    restore.clicked.connect(lambda: ask("restore", "Restore a Copy"))
+    open_rev.setEnabled(bool(usable))
+    restore.setEnabled(bool(usable))
     dialog.exec()
     return picked[0] if picked else None

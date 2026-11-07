@@ -22,6 +22,7 @@ PROJECT_INFO_DIR = "Ableton Project Info"
 # Directories Live or the OS owns; their contents are never part of a version.
 EXCLUDED_DIRS = {
     "Backup",  # Live's own auto-backups — repository history replaces these
+    "Past Revisions",  # one Live Set per pushed revision, written by Push itself
     ".sessionsync",
     ".git",
     "__MACOSX",
@@ -121,6 +122,8 @@ class MediaReport:
 class AbletonAdapter:
     format_name = "ableton"
     adapter_version = 1
+    #: the folder Live uses to find a project's root; kept even when empty
+    project_marker = PROJECT_INFO_DIR
 
     # --- discovery -----------------------------------------------------
 
@@ -169,8 +172,8 @@ class AbletonAdapter:
             count = _count(len(media.outside), "sample")
             result.warnings.append(
                 f"{count} used by this project {_verb(len(media.outside))} outside the "
-                "project folder, so a collaborator would open the project with audio "
-                "missing. Run Collect All and Save in Ableton first.\n  "
+                "project folder. Push copies them into the shared copy's "
+                "Samples/Imported folder for you.\n  "
                 + _first_few(media.outside)
             )
         if media.missing:
@@ -227,6 +230,21 @@ class AbletonAdapter:
         ]
 
     # --- file selection ------------------------------------------------
+
+    def plan_push(self, path: Path, *, known=None, hash_file, rewrite: bool = True):
+        """Consolidate: exactly what a Push of this project sends (see consolidate.py)."""
+        from sessionsync.adapters.ableton.consolidate import plan_push
+
+        path = Path(path)
+        sets = self._live_sets(path)
+        return plan_push(
+            path,
+            tracked=self.enumerate_tracked_files(path),
+            main_set=self._primary_set(path, sets),
+            known=known,
+            hash_file=hash_file,
+            rewrite=rewrite,
+        )
 
     def enumerate_tracked_files(self, path: Path) -> list[Path]:
         path = Path(path)

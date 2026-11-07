@@ -35,9 +35,21 @@ class FileEntry:
     path: str
     sha256: str
     size: int
+    #: For a Live Set that Push rewrote (Consolidate re-pointed its samples):
+    #: the hash of the untouched Set on the computer that pushed it. That copy
+    #: counts as "the same as the shared one", so it is neither shown as changed
+    #: nor downloaded again.
+    source_sha256: str | None = None
 
     def to_dict(self) -> dict:
-        return {"sha256": self.sha256, "size": self.size}
+        data = {"sha256": self.sha256, "size": self.size}
+        if self.source_sha256:
+            data["source_sha256"] = self.source_sha256
+        return data
+
+    def matches(self, sha256: str) -> bool:
+        """Is a local file with this hash this entry's content?"""
+        return sha256 == self.sha256 or (self.source_sha256 is not None and sha256 == self.source_sha256)
 
 
 @dataclass
@@ -54,6 +66,10 @@ class Manifest:
     #: readers that do not know them ignore them, so no format bump is needed.
     summary: str | None = None
     tracks: dict[str, str] | None = None
+    #: The main Live Set saved into Past Revisions/ by this push:
+    #: {"path", "sha256", "size", "set"}. Not part of `files` — it is never
+    #: edited, so it never shows up as a change.
+    revision: dict | None = None
 
     def __post_init__(self) -> None:
         if self.created_at is None:
@@ -78,6 +94,7 @@ class Manifest:
             "note": self.note,
             "summary": self.summary,
             "tracks": self.tracks,
+            "revision": self.revision,
             "files": {path: self.files[path].to_dict() for path in sorted(self.files)},
         }
         return json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=False)
@@ -86,7 +103,12 @@ class Manifest:
     def from_json(cls, raw: str | bytes) -> Manifest:
         data = json.loads(raw)
         files = {
-            path: FileEntry(path=path, sha256=info["sha256"], size=info["size"])
+            path: FileEntry(
+                path=path,
+                sha256=info["sha256"],
+                size=info["size"],
+                source_sha256=info.get("source_sha256"),
+            )
             for path, info in data.get("files", {}).items()
         }
         return cls(
@@ -100,6 +122,7 @@ class Manifest:
             note=data.get("note"),
             summary=data.get("summary"),
             tracks=data.get("tracks"),
+            revision=data.get("revision"),
         )
 
 

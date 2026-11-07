@@ -52,24 +52,46 @@ def local_time(timestamp: str | None) -> str:
 
 
 def warn_about_media(repo: Repository) -> None:
-    """Tell the user now if the project would arrive incomplete."""
-    referenced = getattr(repo.adapter, "referenced_media", None)
-    if referenced is None:
+    """What Push will do with this project's audio (Consolidate), said up front."""
+    try:
+        plan = repo.plan_push(rewrite=False)
+    except Exception:  # noqa: BLE001 - a status line must never be the failure
         return
-    report = referenced(repo.project_root)
-    if report.outside:
+    if plan is not None:
+        describe_plan(plan)
+
+
+def _first_few(paths, limit: int = 5) -> None:
+    for path in list(paths)[:limit]:
+        typer.echo(f"    {path}")
+    if len(paths) > limit:
+        typer.echo(f"    ...and {len(paths) - limit} more")
+
+
+def describe_plan(plan) -> None:
+    """Consolidate's findings: what is copied in, left behind, missing, or blocking."""
+    for problem in plan.problems:
+        typer.echo(f"\n  Cannot push: {problem}")
+    if plan.imported:
         typer.echo(
-            f"\n  Audio outside the project folder ({len(report.outside)}) — "
-            "collaborators would be missing it. Run Collect All and Save in Ableton."
+            f"\n  From elsewhere on this Mac ({len(plan.imported)}, "
+            f"{human_size(plan.imported_bytes)}) — copied into Samples/Imported on Push:"
         )
-        for path in report.outside[:5]:
-            typer.echo(f"    {path}")
-        if len(report.outside) > 5:
-            typer.echo(f"    ...and {len(report.outside) - 5} more")
-    if report.missing:
-        typer.echo(f"\n  Audio this Mac cannot find at all ({len(report.missing)}):")
-        for path in report.missing[:5]:
-            typer.echo(f"    {path}")
+        _first_few([str(p) for p in plan.imported.values()])
+    if plan.unused:
+        typer.echo(
+            f"\n  Not used by any Live Set ({len(plan.unused)}, {human_size(plan.unused_bytes)}) "
+            "— stays on this Mac, not pushed:"
+        )
+        _first_few(plan.unused)
+    if plan.missing:
+        typer.echo(f"\n  Used by the song but nowhere on this Mac ({len(plan.missing)}):")
+        _first_few(plan.missing)
+    if plan.skipped_sets:
+        typer.echo("\n  Live 10 Sets left out (re-save them in Live 11 to share them):")
+        _first_few(plan.skipped_sets)
+    if plan.packs:
+        typer.echo(f"\n  Collaborators need these Ableton Packs: {', '.join(plan.packs)}")
 
 
 def _open(project: Path) -> Repository:
@@ -211,11 +233,29 @@ def review(project: Path = PROJECT_OPTION) -> None:
 def push(
     project: Path = PROJECT_OPTION,
     note: str = typer.Option("", "--note", "-m", help="What you did this session."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what Push would send and leave behind; change nothing."
+    ),
 ) -> None:
-    """Publish this session's work as the new current version."""
+    """Consolidate, then publish this session's work as the new current version.
+
+    Only the files the Live Sets use are sent. Sounds from elsewhere on this Mac
+    are copied into the shared copy's Samples/Imported, and the main Set is saved
+    into Past Revisions.
+    """
     from sessionsync.core.errors import NothingToPushError
 
     repo = _open(project)
+    if dry_run:
+        status = repo.status()
+        typer.echo(
+            f"Push would send {len(status.diff.added)} new and {len(status.diff.modified)} "
+            f"changed files ({human_size(status.upload_bytes)} to upload; the song is "
+            f"{human_size(status.project_bytes)} in all)."
+        )
+        if status.plan is not None:
+            describe_plan(status.plan)
+        return
     repo.heartbeat(state="pushing")
     try:
         result = repo.push(note=note or None)
@@ -229,13 +269,23 @@ def push(
     typer.echo(f"Pushed v{result.version}.")
     typer.echo(
         f"  Added: {len(result.diff.added)}   Modified: {len(result.diff.modified)}"
-        f"   Removed: {len(result.diff.deleted)}   Uploaded: {human_size(result.uploaded_bytes)}"
+        f"   No longer used: {len(result.diff.deleted)}   Uploaded: {human_size(result.uploaded_bytes)}"
     )
+    plan = repo.last_plan
+    if plan is not None:
+        if plan.imported:
+            typer.echo(f"  Copied in from elsewhere on this Mac: {len(plan.imported)}")
+        if plan.unused:
+            typer.echo(
+                f"  Left on this Mac (unused): {len(plan.unused)} ({human_size(plan.unused_bytes)})"
+            )
+        if plan.missing:
+            typer.echo(f"  Missing here, so not shared: {len(plan.missing)}")
 
 
 @app.command()
 def pull(project: Path = PROJECT_OPTION) -> None:
-    """Get the latest version of the project."""
+    """Get the latest version of the project (plus the small Past Revisions Sets)."""
     from sessionsync.core.errors import LocalChangesWouldBeReplacedError
 
     repo = _open(project)
@@ -260,7 +310,7 @@ def pull(project: Path = PROJECT_OPTION) -> None:
     typer.echo(f"Updated to v{result.to_version}.")
     _print_files("Added", result.diff.added)
     _print_files("Updated", result.diff.modified)
-    _print_files("Removed (kept in .sessionsync/trash)", result.diff.deleted)
+    _print_files("No longer used (left on this Mac)", result.diff.deleted)
 
 
 @app.command()
@@ -290,6 +340,32 @@ def restore(
     typer.echo(f"v{version} is in {folder}. Your current project was not changed.")
 
 
+@app.command("open-rev")
+def open_rev(
+    version: int = typer.Argument(..., help="The revision to open."),
+    project: Path = PROJECT_OPTION,
+    no_open: bool = typer.Option(False, "--no-open", help="Get it ready but do not open Live."),
+) -> None:
+    """Open an old revision in Live, fetching any audio it needs first."""
+    import subprocess
+    import sys
+
+    repo = _open(project)
+    try:
+        live_set = repo.open_revision(version)
+    except (SessionSyncError, ValueError, FileNotFoundError) as exc:
+        _fail(exc)
+    if live_set.parent.name == "Past Revisions":
+        typer.echo(f"Rev {version} is ready: {live_set}")
+    else:
+        typer.echo(
+            f"Some of Rev {version}'s audio is different here now, so it was built as a "
+            f"separate copy: {live_set}"
+        )
+    if not no_open and sys.platform == "darwin":
+        subprocess.run(["open", str(live_set)], check=False)
+
+
 @app.command()
 def who(project: Path = PROJECT_OPTION) -> None:
     """Who else is working on this project right now."""
@@ -300,7 +376,7 @@ def who(project: Path = PROJECT_OPTION) -> None:
 
 @app.command()
 def catchup(project: Path = PROJECT_OPTION) -> None:
-    """Someone put back first: save your version aside, bring theirs, say who did what."""
+    """Someone pushed first: save your version aside, bring theirs, say who did what."""
     from sessionsync.core.summary import describe_catch_up
 
     repo = _open(project)
@@ -318,7 +394,7 @@ def pin(
     project: Path = PROJECT_OPTION,
     unpin: bool = typer.Option(False, "--unpin", help="Stop keeping it."),
 ) -> None:
-    """Keep a version even after it is older than the last five."""
+    """Mark a version as one to keep (every version is kept; this labels it)."""
     repo = _open(project)
     pin_version = getattr(repo.storage, "pin_version", None)
     if pin_version is None:

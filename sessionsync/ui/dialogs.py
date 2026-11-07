@@ -14,70 +14,90 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-COLLECT_TIP = (
-    "Collect All and Save copies sounds that live elsewhere on your Mac into this "
-    "project, so your friend's copy plays too. It does not remove sounds you no "
-    "longer use; Live's Manage Files page has a separate clean-up for that."
-)
+def push_preview(snapshot) -> tuple[list[str], list[str]]:
+    """(lines to show, reasons Push cannot go) for the Push dialog.
 
-
-def ask_put_back(parent, project_name: str, outside: list[str], missing: list[str]) -> str | None:
-    """The checklist before putting your version back. Returns the note, or None.
-
-    Both boxes must be ticked, unless the person chooses "Put back anyway".
+    Push always consolidates first: only what the Live Sets use is sent, sounds
+    from elsewhere on this Mac are copied in, and unused audio stays here.
     """
+    from sessionsync.ui.presenter import human_size
+
+    status = snapshot.status
+    lines = [
+        f"Sending {human_size(status.upload_bytes)} new "
+        f"(the song is {human_size(status.project_bytes)} in all)."
+    ]
+    if snapshot.media_outside:
+        lines.append(
+            f"Copying in {_files(len(snapshot.media_outside))} from elsewhere on this Mac "
+            "(into Samples/Imported), so everyone hears them."
+        )
+    if snapshot.unused:
+        lines.append(
+            f"Leaving {_files(len(snapshot.unused))} the song does not use "
+            f"({human_size(snapshot.unused_bytes)}) on this Mac only."
+        )
+    if snapshot.media_missing:
+        lines.append(
+            f"⚠  {_files(len(snapshot.media_missing))} the song uses cannot be found on this "
+            "Mac, so nobody will hear them: " + ", ".join(snapshot.media_missing[:3])
+            + ("…" if len(snapshot.media_missing) > 3 else "")
+        )
+    if snapshot.packs:
+        lines.append(f"Collaborators need these Ableton Packs installed: {', '.join(snapshot.packs)}.")
+    lines.append("The main Live Set is also saved into Past Revisions.")
+    return lines, list(snapshot.problems)
+
+
+def _files(n: int) -> str:
+    return f"{n} file" if n == 1 else f"{n} files"
+
+
+def ask_push(parent, snapshot) -> str | None:
+    """What Push is about to do, then a note. Returns the note, or None."""
+    lines, problems = push_preview(snapshot)
     dialog = QDialog(parent)
-    dialog.setWindowTitle("Put it back")
-    dialog.setMinimumWidth(480)
+    dialog.setWindowTitle("Push")
+    dialog.setMinimumWidth(520)
     layout = QVBoxLayout(dialog)
     layout.setSpacing(10)
 
-    heading = QLabel(f"Ready to put {project_name} back in the shared folder?")
+    heading = QLabel(f"Push {snapshot.project_name} to the shared folder?")
     heading.setWordWrap(True)
     layout.addWidget(heading)
 
-    saved = QCheckBox("I saved the set in Live and closed it (or it is saved)")
+    for line in lines:
+        label = QLabel(line)
+        label.setWordWrap(True)
+        if line.startswith("⚠"):
+            label.setStyleSheet("color: #E0A030;")
+        layout.addWidget(label)
+
+    for problem in problems:
+        label = QLabel("✕  " + problem)
+        label.setWordWrap(True)
+        label.setStyleSheet("color: #E05050;")
+        layout.addWidget(label)
+
+    saved = QCheckBox("I saved the set in Live")
     layout.addWidget(saved)
 
-    collected = QCheckBox("I ran Collect All and Save in Live (File menu)")
-    layout.addWidget(collected)
-    if not outside and not missing:
-        collected.setChecked(True)
-        collected.setText("All sounds are inside the project already ✓")
-    else:
-        warn = QLabel(
-            f"⚠  {len(outside)} sound(s) still live outside this project"
-            + (f" and {len(missing)} can't be found" if missing else "")
-            + ". Your friend would not hear them."
-        )
-        warn.setWordWrap(True)
-        warn.setStyleSheet("color: #E0A030;")
-        layout.addWidget(warn)
-
-    tip = QLabel(COLLECT_TIP)
-    tip.setWordWrap(True)
-    tip.setStyleSheet("font-size: 11px; opacity: 0.8;")
-    layout.addWidget(tip)
-
     note = QLineEdit()
-    note.setPlaceholderText("What did you do? (optional)")
+    note.setPlaceholderText("What did you do? (optional — it names the Past Revision)")
     layout.addWidget(note)
 
     buttons = QDialogButtonBox()
-    go = buttons.addButton("Put Back", QDialogButtonBox.AcceptRole)
-    anyway = buttons.addButton("Put back anyway", QDialogButtonBox.ActionRole)
+    go = buttons.addButton("Push", QDialogButtonBox.AcceptRole)
     buttons.addButton("Cancel", QDialogButtonBox.RejectRole)
-    go.setEnabled(False)
     layout.addWidget(buttons)
 
     def update() -> None:
-        go.setEnabled(saved.isChecked() and collected.isChecked())
+        go.setEnabled(saved.isChecked() and not problems)
+        go.setToolTip("Fix the problem above first." if problems else "")
 
     saved.toggled.connect(update)
-    collected.toggled.connect(update)
     buttons.accepted.connect(dialog.accept)
     buttons.rejected.connect(dialog.reject)
-    anyway.clicked.connect(dialog.accept)
     update()
 
     if dialog.exec() != QDialog.Accepted:
