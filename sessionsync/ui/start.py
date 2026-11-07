@@ -182,6 +182,9 @@ class _HubHeader(QWidget):
         share.setMinimumWidth(150)
         share.clicked.connect(lambda: on_share(hub))
         row.addWidget(share)
+        if getattr(hub, "single_song", False):
+            # Connected to one song, not the folder of songs: nothing to add to.
+            share.hide()
 
 
 class _SongRow(QWidget):

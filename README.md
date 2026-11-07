@@ -17,7 +17,7 @@ before you start playing — not after two hours of takes.
 | PySide6 Mac app, packaged as a `.app` | done |
 | Shared folders ("hubs"), version summaries, restore a copy, clickable banners | done |
 | Consolidate on Push (only used files, outside files copied in, Past Revisions) | done |
-| Test suite, incl. crash and stale-push tests | 370 passing |
+| Test suite, incl. crash and stale-push tests | 435 passing |
 | Google Drive backend | next |
 
 Proven on a real 415 MB Live 11 project: byte-for-byte reconstruction of 103
@@ -28,7 +28,11 @@ set down to 95 KB actually uploaded.
 
 Connect a shared folder once (for example a Google Drive folder that Drive for
 desktop keeps on your Mac) and every Ableton song inside it appears, including
-songs added later. Anything else in the folder is ignored.
+songs added later. Anything else in the folder is ignored. If you were only given
+one song's folder (Google Drive shows it under "Shared with me"), connect that: it
+is listed as a single song. A song's own folders (`Song data — managed by Session
+Sync`, Live's `Backup`) are never mistaken for songs, and nothing inside a song can
+be shared as a new one.
 
 ```bash
 sessionsync hub add "~/My Drive/Song Collaboration/Sam Stefan Sketches" --name Sam

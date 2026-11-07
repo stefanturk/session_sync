@@ -74,3 +74,21 @@ class DriveEditsError(SessionSyncError):
             "(not in anyone's own copy). Press Rescue Edits first: it brings that "
             "save into your copy and puts the shared copy right. Nothing is lost."
         )
+
+
+class PartOfASongError(NotAProjectError):
+    """The chosen folder belongs to a shared song (or holds shared songs)."""
+
+
+class SharedHistoryMissingError(SessionSyncError):
+    """The song's folder in Drive is there, but its `.sessionsync` history is not."""
+
+    def __init__(self, song_folder):
+        self.song_folder = song_folder
+        super().__init__(
+            f"The shared copy of {song_folder.name} has lost its Session Sync history "
+            "(the hidden .sessionsync folder inside it is missing — moved or deleted in "
+            "Google Drive). Your own copy is untouched and still opens in Live. Look in "
+            "Google Drive's Trash or at the top of My Drive for a .sessionsync folder, "
+            "or share your copy again as a new song."
+        )

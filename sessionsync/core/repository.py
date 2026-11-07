@@ -206,7 +206,14 @@ class Repository:
 
         state = LocalState.open(project_root)
         storage = storage or storage_from_location(state.remote)
-        metadata = storage.read_repo_metadata() or {}
+        metadata = storage.read_repo_metadata()
+        if metadata is None:
+            root = getattr(storage, "root", None)
+            if root is not None and Path(root).is_dir() and state.base_version:
+                from sessionsync.core.errors import SharedHistoryMissingError
+
+                raise SharedHistoryMissingError(Path(root))
+            metadata = {}
         adapter = get_adapter(metadata.get("project_format", "ableton"))
         return cls(project_root, storage, adapter, author, state)
 

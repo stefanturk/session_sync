@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sessionsync.adapters.ableton.adapter import AbletonAdapter
-from sessionsync.core.errors import NotAProjectError
+from sessionsync.core.errors import NotAProjectError, PartOfASongError
 from sessionsync.core.hashing import HashCache
 from sessionsync.core.localstate import LocalState
 from sessionsync.core.manifest import Manifest, build_file_map
@@ -44,6 +44,7 @@ def adopt(folder: Path, *, author: dict, adapter: AbletonAdapter | None = None) 
     """
     folder = Path(folder)
     adapter = adapter or AbletonAdapter()
+    refuse_part_of_a_song(folder)
     if not adapter.detect_project(folder):
         raise NotAProjectError(
             f"{folder.name} does not look like an Ableton project folder. "
@@ -112,6 +113,20 @@ def add_local_project(
     """
     local_folder, hub_folder = Path(local_folder), Path(hub_folder)
     adapter = AbletonAdapter()
+    if MasterFolderStorage.song_around(local_folder) is not None or MasterFolderStorage.holds_songs(local_folder):
+        raise PartOfASongError(
+            f"{local_folder.name} is (or is inside) a shared song in Google Drive, not a "
+            "project on this computer. To work on that song, open it from the list instead."
+        )
+    if _inside(local_folder, hub_folder) or _inside(hub_folder, local_folder):
+        raise PartOfASongError(
+            f"{local_folder.name} is inside the shared folder. Choose the project on this "
+            "computer that you want to share (for example on your Desktop or in Music)."
+        )
+    if (local_folder / ".sessionsync").exists():
+        raise FileExistsError(
+            f"{local_folder.name} is already linked to a shared song. Open it instead."
+        )
     if not adapter.detect_project(local_folder):
         raise NotAProjectError(
             f"{local_folder.name} does not look like an Ableton project folder. "
@@ -127,10 +142,35 @@ def add_local_project(
         repo = Repository.create(local_folder, MasterFolderStorage(target), adapter=adapter, author=author)
         repo.push(note="Added to the shared folder")
     except BaseException:
+        # Only what this call created: `target` and the `.sessionsync` were
+        # checked above not to exist. Never anything that was already there.
         shutil.rmtree(target, ignore_errors=True)
         shutil.rmtree(local_folder / ".sessionsync", ignore_errors=True)
         raise
     return repo
+
+
+def refuse_part_of_a_song(folder: Path) -> None:
+    """Never set up a song inside a song (its data folder, Live's Backup), or a shared folder."""
+    around = MasterFolderStorage.song_around(folder)
+    if around is not None and around != Path(folder):
+        raise PartOfASongError(
+            f"{Path(folder).name} is part of the shared song {around.name}, not a song of "
+            "its own. Nothing was changed."
+        )
+    if MasterFolderStorage.holds_songs(folder):
+        raise PartOfASongError(
+            f"{Path(folder).name} holds shared songs: it is a shared folder, not a song. "
+            "Nothing was changed."
+        )
+
+
+def _inside(path: Path, other: Path) -> bool:
+    try:
+        Path(path).resolve().relative_to(Path(other).resolve())
+        return True
+    except (ValueError, OSError):
+        return False
 
 
 def _tracks(adapter, folder):

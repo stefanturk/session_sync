@@ -143,6 +143,36 @@ class MasterFolderStorage:
         meta = Path(folder) / META_DIR
         return (meta / REPO_FILE).exists() and not (meta / "state.db").exists()
 
+    @classmethod
+    def song_around(cls, folder: Path) -> Path | None:
+        """The shared song `folder` is, or is somewhere inside. None if neither.
+
+        Looks upwards: a folder whose `.sessionsync` names a repository, or the
+        song holding a "Song data — managed by Session Sync" folder (which says
+        so even when the `.sessionsync` beside it has gone missing).
+        """
+        folder = Path(folder)
+        for candidate in (folder, *folder.parents):
+            if candidate.name == DATA_DIR:
+                return candidate.parent
+            meta = candidate / META_DIR
+            if (meta / REPO_FILE).exists() and not (meta / "state.db").exists():
+                return candidate
+            if (candidate / DATA_DIR).is_dir() and (
+                meta.is_dir() or any((candidate / name).exists() for name in launcher.FRONT_DOOR)
+            ):
+                return candidate
+        return None
+
+    @classmethod
+    def holds_songs(cls, folder: Path) -> bool:
+        """`folder` has shared songs inside it (it is a shared folder, not a song)."""
+        try:
+            children = [p for p in Path(folder).iterdir() if p.is_dir() and not p.name.startswith(".")]
+        except OSError:
+            return False
+        return any(cls.song_around(child) == child for child in children)
+
     # --- metadata ------------------------------------------------------
 
     def read_repo_metadata(self) -> dict | None:

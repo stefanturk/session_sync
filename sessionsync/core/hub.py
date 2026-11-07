@@ -22,7 +22,10 @@ from sessionsync.core.locations import free_folder
 from sessionsync.core.repository import Repository
 from sessionsync.core.summary import describe_version
 from sessionsync.core.manifest import Manifest
-from sessionsync.storage.master_folder import MasterFolderStorage
+from sessionsync.storage.master_folder import DATA_DIR, MasterFolderStorage
+
+#: Never songs, whatever they contain: Live's own safety copies and the like.
+NOT_SONGS = {DATA_DIR, "Backup", "Past Revisions", "Ableton Project Info", "Samples"}
 
 
 @dataclass
@@ -51,7 +54,13 @@ class HubEvent:
 
 class Hub:
     def __init__(self, path: Path, name: str | None = None):
-        self.path = Path(path)
+        chosen = Path(path)
+        # Connected to one song (or a folder inside one, like its data folder)
+        # instead of the folder holding the songs: that is a hub of one song.
+        # Never treat the song's own folders as songs of their own.
+        around = MasterFolderStorage.song_around(chosen)
+        self.path = around if around is not None else chosen
+        self.single_song = around is not None
         self.name = name or self.path.name
 
     # --- looking ---------------------------------------------------------
@@ -59,10 +68,12 @@ class Hub:
     def songs(self) -> list[HubSong]:
         if not self.path.is_dir():
             return []
+        if self.single_song:
+            return [self._shared_song(self.path)]
         adapter = AbletonAdapter()
         found = []
         for folder in sorted(self.path.iterdir(), key=lambda p: p.name.lower()):
-            if folder.name.startswith(".") or not folder.is_dir():
+            if folder.name.startswith(".") or not folder.is_dir() or folder.name in NOT_SONGS:
                 continue
             if MasterFolderStorage.looks_like_master(folder):
                 found.append(self._shared_song(folder))
@@ -96,12 +107,21 @@ class Hub:
         return Path(local_base) / song_name
 
     def storage_for(self, song_name: str) -> MasterFolderStorage:
+        if self.single_song:
+            return MasterFolderStorage(self.path)
         return MasterFolderStorage(self.path / song_name)
 
     # --- acting ----------------------------------------------------------
 
     def add_song(self, song_name: str, project: Path, author: dict, *, note: str | None = None) -> Repository:
         """Copy a project that lives on this computer into the hub; it becomes the working copy."""
+        if self.single_song:
+            from sessionsync.core.errors import PartOfASongError
+
+            raise PartOfASongError(
+                f"{self.name} is one song, not a folder of songs, so nothing else can be "
+                "added to it. Connect the folder that holds your songs to share a new one."
+            )
         return master.add_local_project(Path(project), self.path, author=author, name=song_name)
 
     def join_song(self, song_name: str, local_base: Path, author: dict, destination: Path | None = None) -> Repository:
