@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from sessionsync.core import locations
+from sessionsync.core import locations, osinfo
 from sessionsync.ui.settings import Settings
 
 
@@ -59,11 +59,11 @@ class SettingsDialog(QDialog):
         self.songs.setRootIsDecorated(False)
         self.songs.setColumnWidth(0, 200)
         self.songs.itemDoubleClicked.connect(self._reveal)
-        self.songs.setToolTip("Double-click a song to show it in Finder.")
+        self.songs.setToolTip(f"Double-click a song to show it in {osinfo.FILE_MANAGER}.")
         column.addWidget(self.songs, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        reveal = buttons.addButton("Show in Finder", QDialogButtonBox.ActionRole)
+        reveal = buttons.addButton(f"Show in {osinfo.FILE_MANAGER}", QDialogButtonBox.ActionRole)
         reveal.clicked.connect(lambda: self._reveal(self.songs.currentItem()))
         buttons.rejected.connect(self.reject)
         column.addWidget(buttons)

@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtWidgets import QApplication, QInputDialog
 
 from sessionsync.auth.identity import IdentityNotSetError, load_identity, save_identity
+from sessionsync.core import osinfo
+from sessionsync.ui import single, winscheme
 from sessionsync.ui.settings import Settings
 from sessionsync.ui.window import MainWindow
+
+#: SESSIONSYNC_SMOKE=<seconds>: start, log what arrives, quit — for build checks.
+SMOKE = "SESSIONSYNC_SMOKE"
 
 
 def project_argument(argv: list[str]) -> Path | None:
@@ -47,6 +53,9 @@ class SessionSyncApp(QApplication):
         return super().event(event)
 
     def deliver(self, url: str) -> None:
+        osinfo.log(f"link: {url}")
+        if os.environ.get(SMOKE):
+            return  # a build check: never stop on a dialog nobody can see
         if self.window is None:
             self.pending.append(url)
         else:
@@ -66,6 +75,19 @@ def link_argument(argv: list[str]) -> str | None:
 def main(argv: list[str] | None = None) -> int:
     argv = list(argv if argv is not None else sys.argv[1:])
     app = SessionSyncApp([sys.argv[0] if sys.argv else "sessionsync"])
+
+    # Already running? Hand over what this copy was started for, and stop.
+    # (Windows starts a new copy for every "▶ Open in Live" click.)
+    link = link_argument(argv)
+    project = project_argument(argv)
+    message = link or (str(project.resolve()) if project else single.SHOW)
+    if single.forward(message):
+        osinfo.log(f"handed to the running copy: {message}")
+        return 0
+    listener = single.Listener()
+    if not listener.listen():
+        osinfo.log("could not listen for other copies; carrying on alone")
+    winscheme.register_this_app()
     app.setApplicationName("SessionSync")
     app.setApplicationDisplayName("SessionSync")
     # The window is dark whatever the system is set to, so ask for the dark
@@ -81,18 +103,37 @@ def main(argv: list[str] | None = None) -> int:
     window = MainWindow(Settings())
     window.show()
     window.start_hub_watch()
+    listener.received.connect(lambda text: _from_another_copy(app, window, text))
 
-    link = link_argument(argv)  # Windows passes the link on the command line
-    if link:
+    if link:  # Windows passes the link on the command line
         app.deliver(link)
     app.window_ready(window)
 
     # The start screen is the front door; a path on the command line skips it.
-    project = project_argument(argv)
     if project is not None:
         window.open_project(project)
 
-    return app.exec()
+    smoke = os.environ.get(SMOKE)
+    if smoke:
+        osinfo.log("smoke: window up")
+        QTimer.singleShot(int(float(smoke) * 1000), app.quit)
+
+    code = app.exec()
+    listener.close()
+    return code
+
+
+def _from_another_copy(app: SessionSyncApp, window: MainWindow, text: str) -> None:
+    osinfo.log(f"from another copy: {text}")
+    window.show()
+    window.raise_()
+    window.activateWindow()
+    if text == single.SHOW:
+        return
+    if text.startswith("sessionsync:"):
+        app.deliver(text)
+    elif not os.environ.get(SMOKE):
+        window.open_project(Path(text))
 
 
 def _ensure_identity() -> bool:

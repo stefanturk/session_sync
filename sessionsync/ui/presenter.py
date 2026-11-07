@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from sessionsync.core import osinfo
 from sessionsync.core.repository import Status
 from sessionsync.core.session import describe_sessions
 
@@ -124,7 +125,7 @@ def screen(
         primary=_primary(status.state, edits=bool(edits)),
         state_label=_state_label(status.state, behind, live_open=live_open, edits=bool(edits)),
         changes_hint=(
-            "Only saved work counts — press ⌘S in Live before you push."
+            f"Only saved work counts — press {osinfo.SAVE_KEYS} in Live before you push."
             if live_open else ""
         ),
         state_hint=_state_hint(status.state, behind),
@@ -336,4 +337,4 @@ def local_time(timestamp: str | None) -> str:
         return timestamp
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone().strftime("%d %b %Y, %-I:%M %p")
+    return osinfo.strftime(parsed.astimezone(), "%d %b %Y, %-I:%M %p")

@@ -29,7 +29,7 @@ class NothingToPushError(SessionSyncError):
 
 
 class LocalChangesWouldBeReplacedError(SessionSyncError):
-    """Pulling would replace files this Mac has edited but not pushed."""
+    """Pulling would replace files this computer has edited but not pushed."""
 
     def __init__(self, paths: list[str]):
         self.paths = paths

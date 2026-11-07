@@ -33,7 +33,7 @@ class Snapshot:
     session_open: bool
     last_push: dict | None = None
     media_outside: list[str] = field(default_factory=list)   # copied in on Push
-    media_missing: list[str] = field(default_factory=list)   # used, but nowhere on this Mac
+    media_missing: list[str] = field(default_factory=list)   # used, but nowhere on this computer
     unused: list[str] = field(default_factory=list)          # audio the Sets do not use: stays here
     unused_bytes: int = 0
     packs: list[str] = field(default_factory=list)           # Ableton Packs a collaborator needs

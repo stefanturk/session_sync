@@ -9,13 +9,17 @@ start raises a dialog.
 """
 
 import multiprocessing
+import os
 import subprocess
 import sys
 import traceback
 from datetime import datetime
 from pathlib import Path
 
-LOG = Path.home() / "Library" / "Logs" / "SessionSync.log"
+if sys.platform == "win32":
+    LOG = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "SessionSync" / "SessionSync.log"
+else:
+    LOG = Path.home() / "Library" / "Logs" / "SessionSync.log"
 
 
 def _log(text: str) -> None:
@@ -30,6 +34,17 @@ def _log(text: str) -> None:
 def _report(error: BaseException) -> None:
     _log(traceback.format_exc())
     detail = f"{type(error).__name__}: {error}".replace('"', "'")
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(
+                None, f"SessionSync could not start.\n\n{detail}\n\nFull log: {LOG}",
+                "SessionSync", 0x30,
+            )
+        except Exception:  # noqa: BLE001 - nothing left to tell the user with
+            pass
+        return
     try:
         subprocess.run(
             [

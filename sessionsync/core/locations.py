@@ -10,13 +10,17 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 #: Room to spare after a pull, so Live can still record and save.
 SPARE_BYTES = 2 * 1024**3
 
-_SYNCED_NAMES = ("My Drive", "Google Drive", "GoogleDrive", "Dropbox", "OneDrive", "Shared drives")
+_SYNCED_NAMES = (
+    "My Drive", "Google Drive", "GoogleDrive", "Dropbox", "OneDrive", "Shared drives",
+    "iCloudDrive", "iCloud Drive",
+)
 
 
 @dataclass
@@ -31,7 +35,28 @@ def home() -> Path:
 
 
 def desktop() -> Path:
+    """The Desktop. On Windows it may have been moved (often into OneDrive)."""
+    if os.environ.get("SESSIONSYNC_USER_HOME") is None and sys.platform == "win32":
+        moved = _windows_desktop()
+        if moved is not None:
+            return moved
     return home() / "Desktop"
+
+
+def _windows_desktop() -> Path | None:
+    """Explorer's own record of where the Desktop is (User Shell Folders)."""
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders",
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, "Desktop")
+    except (ImportError, OSError):
+        return None
+    path = Path(os.path.expandvars(value))
+    return path if path.is_dir() else None
 
 
 def fallback_root() -> Path:
@@ -45,9 +70,11 @@ def desktop_in_icloud() -> bool:
 
 def default_root() -> Path:
     """The Desktop, unless iCloud (or OneDrive) would sync it — then Music/Session Sync."""
-    if desktop_in_icloud() or is_synced(desktop()):
+    if not (desktop_in_icloud() or is_synced(desktop())):
+        return desktop()
+    if not is_synced(fallback_root()):
         return fallback_root()
-    return desktop()
+    return home() / "Session Sync"
 
 
 def is_synced(path: Path) -> bool:
@@ -60,7 +87,7 @@ def is_synced(path: Path) -> bool:
     text = path.as_posix()
     if "/Library/CloudStorage/" in text or "/Library/Mobile Documents/" in text:
         return True
-    return any(part.startswith(name) for part in parts for name in _SYNCED_NAMES)
+    return any(part == "Box" or part.startswith(_SYNCED_NAMES) for part in parts)
 
 
 def check_location(folder: Path, *, hubs: list[Path] = (), songs: list[Path] = ()) -> Verdict:

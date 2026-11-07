@@ -69,6 +69,31 @@ because the Dock pins whichever bundle you dragged from — and `dist/` is delet
 on every rebuild. Anything that fails to start is logged to
 `~/Library/Logs/SessionSync.log` and reported in a dialog.
 
+### Windows
+
+Every push to GitHub builds the Windows installer (Actions → "Test and build" →
+the `SessionSync-windows` artifact): `SessionSync-Setup-0.2.0.exe`, plus a zip
+of the same program. The installer needs no administrator rights. It puts the
+app in `%LOCALAPPDATA%\Programs\SessionSync` with a Start menu entry, and it
+registers `sessionsync:` links, so double-clicking `▶ Open in Live (Windows)`
+in a shared song folder opens your copy. The app is unsigned, so the first time
+it runs Windows SmartScreen says "Windows protected your PC". Click **More info →
+Run anyway**.
+
+To build it on a Windows PC (Python 3.12 and, for the installer, Inno Setup 6):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1
+powershell -ExecutionPolicy Bypass -File scripts\smoke_windows.ps1   # install + link check
+```
+
+What differs on Windows:
+- Your copy goes on the Desktop. If the Desktop is in OneDrive, it goes to
+  `Music\Session Sync` instead.
+- Live is spotted through the task list and
+  `%APPDATA%\Ableton\Live *\Preferences\Log.txt`.
+- The log is `%LOCALAPPDATA%\SessionSync\SessionSync.log`.
+
 For the `sessionsync` command without managing a virtualenv yourself:
 
 ```bash
@@ -128,6 +153,7 @@ Each song folder in Drive looks like this, so nobody can open the shared copy in
 ```
 Sam Stefan Song Sketches/
   ▶ Open in Live.webloc                       double-click: opens YOUR copy (getting it first)
+  ▶ Open in Live (Windows).url                the same, for a Windows PC
   Read me.txt
   Song data — managed by Session Sync/        the project; its Live Sets end in .als-shared
   .sessionsync/                               versions, history, who is working

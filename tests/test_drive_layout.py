@@ -63,6 +63,14 @@ def test_drive_holds_no_live_set_and_has_a_front_door(master, alice):
     assert "double-click" in (master.root / launcher.READ_ME).read_text()
 
 
+def test_there_is_a_front_door_for_windows_too(master, alice):
+    door = master.root / launcher.WINDOWS_LAUNCHER
+    text = door.read_bytes().decode("ascii")
+    assert text.startswith("[InternetShortcut]\r\nURL=sessionsync://open?")
+    assert launcher.parse_link(launcher.read_link(door)) == (alice.state.repository_id, "My Song")
+    assert launcher.read_link(master.root / launcher.MAC_LAUNCHER) == launcher.read_link(door)
+
+
 def test_the_front_door_is_not_rewritten_when_nothing_changed(master, alice):
     door = master.root / launcher.MAC_LAUNCHER
     old = time.time() - 3600
@@ -242,7 +250,10 @@ def test_rescue_restores_drive_from_my_copy_when_drive_had_the_only_one(master, 
 # --- the command line ---------------------------------------------------------
 
 
-def test_cli_rescue_and_open(master, alice):
+def test_cli_rescue_and_open(master, alice, monkeypatch, tmp_path):
+    monkeypatch.setenv("SESSIONSYNC_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("SESSIONSYNC_NAME", "Alice")
+    monkeypatch.setenv("SESSIONSYNC_EMAIL", "alice@example.com")
     from typer.testing import CliRunner
 
     from sessionsync.cli import app

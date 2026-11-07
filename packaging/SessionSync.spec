@@ -1,18 +1,21 @@
-# PyInstaller spec for the SessionSync Mac app.
+# PyInstaller spec for SessionSync: the Mac app and the Windows program.
 #
-# Build with:  scripts/build_app.sh
+# Build with:  scripts/build_app.sh (Mac)  or  scripts/build_windows.ps1 (Windows)
 #
 # PySide6 pulls in a great deal that a four-button window has no use for
 # (WebEngine alone is hundreds of megabytes), so the unused modules are excluded
 # rather than shipped.
 
 import os
+import sys
 
 block_cipher = None
+WINDOWS = sys.platform == "win32"
 
 # Rendered by scripts/render_icon.py during the build; absent if that failed,
 # in which case the app gets the generic bundle icon rather than no app.
-ICON = os.environ.get("SESSIONSYNC_ICNS") or None
+# Windows takes a PNG (PyInstaller converts it to .ico when Pillow is installed).
+ICON = os.environ.get("SESSIONSYNC_ICO" if WINDOWS else "SESSIONSYNC_ICNS") or None
 if ICON and not os.path.exists(ICON):
     ICON = None
 
@@ -74,6 +77,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=ICON if WINDOWS else None,
 )
 
 coll = COLLECT(
@@ -85,7 +89,8 @@ coll = COLLECT(
     name="SessionSync",
 )
 
-app = BUNDLE(
+if not WINDOWS:
+  app = BUNDLE(
     coll,
     name="SessionSync.app",
     icon=ICON,

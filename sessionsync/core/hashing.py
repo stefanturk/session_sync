@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 CHUNK_SIZE = 1024 * 1024
@@ -24,13 +25,17 @@ def hash_file(path: Path) -> str:
 
 
 class HashCache:
-    """Maps (path, size, mtime, inode) to a content hash, backed by SQLite."""
+    """Maps (path, size, mtime, inode) to a content hash, backed by SQLite.
+
+    Opened per lookup rather than held, so the song folder is never locked on
+    Windows by an app that merely looked at it.
+    """
 
     def __init__(self, db_path: Path):
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self._db_path)
-        self._conn.execute(
+        with self._connect() as conn:
+            conn.execute(
             """
             CREATE TABLE IF NOT EXISTS hash_cache (
                 path     TEXT PRIMARY KEY,
@@ -40,8 +45,11 @@ class HashCache:
                 sha256   TEXT NOT NULL
             )
             """
-        )
-        self._conn.commit()
+            )
+            conn.commit()
+
+    def _connect(self):
+        return closing(sqlite3.connect(self._db_path, timeout=10))
 
     def hash_file(self, path: Path) -> str:
         path = Path(path)
@@ -49,21 +57,23 @@ class HashCache:
         stat = path.stat()
         identity = (stat.st_size, stat.st_mtime_ns, stat.st_ino)
 
-        row = self._conn.execute(
-            "SELECT size, mtime_ns, inode, sha256 FROM hash_cache WHERE path = ?",
-            (key,),
-        ).fetchone()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT size, mtime_ns, inode, sha256 FROM hash_cache WHERE path = ?",
+                (key,),
+            ).fetchone()
         if row is not None and tuple(row[:3]) == identity:
             return row[3]
 
         digest = hash_file(path)
-        self._conn.execute(
-            "INSERT OR REPLACE INTO hash_cache (path, size, mtime_ns, inode, sha256)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (key, *identity, digest),
-        )
-        self._conn.commit()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO hash_cache (path, size, mtime_ns, inode, sha256)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (key, *identity, digest),
+            )
+            conn.commit()
         return digest
 
     def close(self) -> None:
-        self._conn.close()
+        """Nothing is held open."""

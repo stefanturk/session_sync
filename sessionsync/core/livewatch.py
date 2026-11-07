@@ -9,12 +9,26 @@ only ever drives gentle notes, never a lock.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
 
-PREFS = Path.home() / "Library" / "Preferences" / "Ableton"
+from sessionsync.core import osinfo
+
+
+def _prefs() -> Path:
+    """Where Live keeps its Log.txt: one folder per Live version under here."""
+    if osinfo.IS_WINDOWS:
+        roaming = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        return Path(roaming) / "Ableton"
+    return Path.home() / "Library" / "Preferences" / "Ableton"
+
+
+PREFS = _prefs()
+# Mac: Live 12.1/Log.txt.  Windows: Live 12.1\Preferences\Log.txt.
+_LOG_PATTERNS = ("Live */Log.txt", "Live */Preferences/Log.txt")
 _LOADING = re.compile(
     r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?): info: Loading document "(.+)"\s*$'
 )
@@ -29,7 +43,8 @@ def parse_loading(line: str) -> tuple[datetime, Path] | None:
 
 
 def newest_log(prefs: Path | None = None) -> Path | None:
-    logs = [p for p in Path(prefs or PREFS).glob("Live */Log.txt") if p.is_file()]
+    base = Path(prefs or PREFS)
+    logs = [p for pattern in _LOG_PATTERNS for p in base.glob(pattern) if p.is_file()]
     return max(logs, key=lambda p: p.stat().st_mtime) if logs else None
 
 
@@ -51,6 +66,8 @@ def last_document(log: Path) -> tuple[datetime, Path] | None:
 
 
 def live_is_running() -> bool:
+    if osinfo.IS_WINDOWS:
+        return _live_in_tasklist()
     try:
         result = subprocess.run(
             ["pgrep", "-f", "Ableton Live"], capture_output=True, timeout=5
@@ -58,6 +75,26 @@ def live_is_running() -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return result.returncode == 0
+
+
+def _live_in_tasklist() -> bool:
+    """Windows: Live runs as "Ableton Live 12 Suite.exe" and the like."""
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"], capture_output=True, timeout=10,
+            **osinfo.quiet_flags(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return running_in_tasklist(result.stdout.decode("utf-8", errors="replace"))
+
+
+def running_in_tasklist(text: str) -> bool:
+    for line in text.splitlines():
+        name = line.split(",", 1)[0].strip().strip('"').lower()
+        if name.startswith("ableton live") and name.endswith(".exe"):
+            return True
+    return False
 
 
 def open_document(*, log: Path | None = None, running: bool | None = None) -> Path | None:

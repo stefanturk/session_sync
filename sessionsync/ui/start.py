@@ -185,7 +185,7 @@ class _HubHeader(QWidget):
 
 
 class _SongRow(QWidget):
-    """Song name, who did what last, and whether this Mac is behind."""
+    """Song name, who did what last, and whether this computer is behind."""
 
     def __init__(self, row: "hubsync.SongRow", on_live=None):
         super().__init__()

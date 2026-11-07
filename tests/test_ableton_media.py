@@ -57,7 +57,7 @@ def collected(tmp_path):
 
 @pytest.fixture
 def uncollected(tmp_path):
-    """A project that points at audio sitting somewhere else on this Mac."""
+    """A project that points at audio sitting somewhere else on this computer."""
     project = tmp_path / "My Song"
     project.mkdir(parents=True)
     library = tmp_path / "Sample Library"

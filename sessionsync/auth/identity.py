@@ -1,6 +1,6 @@
 """Who is pushing.
 
-Until Google sign-in arrives this is just a name and an email kept on this Mac;
+Until Google sign-in arrives this is just a name and an email kept on this computer;
 it is what shows up next to a version in the project's history. The Google
 account will replace it as the source of truth, and the shape stays the same.
 """

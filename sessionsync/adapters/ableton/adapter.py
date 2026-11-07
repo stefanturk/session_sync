@@ -198,7 +198,7 @@ class AbletonAdapter:
         if media.missing:
             count = _count(len(media.missing), "sample")
             result.warnings.append(
-                f"{count} used by this project cannot be found on this Mac at all — "
+                f"{count} used by this project cannot be found on this computer at all — "
                 "the project is already incomplete here.\n  " + _first_few(media.missing)
             )
 
@@ -209,7 +209,7 @@ class AbletonAdapter:
 
         Live records each sample twice: a path relative to the project folder
         and the absolute path it was imported from. Audio that only resolves
-        through the absolute path exists on this Mac alone — it is exactly what
+        through the absolute path exists on this computer alone — it is exactly what
         Collect All and Save would pull in, and what a collaborator would be
         missing.
         """
@@ -244,7 +244,7 @@ class AbletonAdapter:
             "Tick the categories you want copied in (recorded and imported audio at "
             "minimum; also Max for Live devices if you use them).",
             "Collect All and Save copies every sample the Set uses into the project "
-            "folder, so collaborators are not missing audio that only exists on your Mac.",
+            "folder, so collaborators are not missing audio that only exists on your computer.",
             "Save, then close the Set before pushing.",
         ]
 

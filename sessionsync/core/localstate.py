@@ -1,4 +1,4 @@
-"""What this Mac knows about its working copy.
+"""What this computer knows about its working copy.
 
 Lives in `.sessionsync/` inside the project folder, so the folder stays an
 ordinary Ableton project that opens fine without SessionSync installed.
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 STATE_DIR = ".sessionsync"
@@ -16,13 +17,21 @@ TRASH_DIR = "trash"
 
 
 class LocalState:
+    """Each read and write opens the database and closes it again.
+
+    Holding it open would lock the song folder on Windows: after closing the
+    song's tab you could not move, rename or delete the folder until the app
+    quit. It is a handful of tiny rows, so reopening costs nothing.
+    """
+
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root)
-        self._conn = sqlite3.connect(self.db_path)
-        self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)"
-        )
-        self._conn.commit()
+        with self._connect() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)")
+            conn.commit()
+
+    def _connect(self):
+        return closing(sqlite3.connect(self.db_path, timeout=10))
 
     # --- locations -----------------------------------------------------
 
@@ -64,15 +73,17 @@ class LocalState:
     # --- stored values -------------------------------------------------
 
     def _get(self, key: str, default=None):
-        row = self._conn.execute("SELECT value FROM state WHERE key = ?", (key,)).fetchone()
+        with self._connect() as conn:
+            row = conn.execute("SELECT value FROM state WHERE key = ?", (key,)).fetchone()
         return json.loads(row[0]) if row else default
 
     def _set(self, key: str, value) -> None:
-        self._conn.execute(
-            "INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)",
-            (key, json.dumps(value)),
-        )
-        self._conn.commit()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)",
+                (key, json.dumps(value)),
+            )
+            conn.commit()
 
     @property
     def repository_id(self) -> str | None:
@@ -133,4 +144,4 @@ class LocalState:
         self._set("last_push", value)
 
     def close(self) -> None:
-        self._conn.close()
+        """Nothing is held open; kept so callers need not know that."""

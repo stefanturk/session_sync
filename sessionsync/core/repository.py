@@ -24,6 +24,7 @@ from pathlib import Path
 
 from sessionsync.adapters import get_adapter
 from sessionsync.adapters.base import DAWAdapter
+from sessionsync.core import osinfo
 from sessionsync.core.errors import (
     DriveEditsError,
     LocalChangesWouldBeReplacedError,
@@ -625,7 +626,7 @@ class Repository:
         trash = self._new_trash_folder()
         downloaded = 0
         # Walk the whole target version, not just what changed between versions:
-        # a file missing from this Mac must come back even if nobody touched it.
+        # a file missing from this computer must come back even if nobody touched it.
         for path, entry in sorted(target.files.items()):
             local = self.project_root / path
             if local.exists():
@@ -818,7 +819,7 @@ class Repository:
                 shutil.copy2(source, target)
                 out.append(Rescued(target, replaced=True))
                 continue
-            when = datetime.fromtimestamp(source.stat().st_mtime).strftime("%-d %b %H.%M")
+            when = osinfo.strftime(datetime.fromtimestamp(source.stat().st_mtime), "%-d %b %H.%M")
             side = _free_name(self.project_root / f"{Path(rel).stem} (edited in Drive, {when}).als")
             shutil.copy2(source, side)
             out.append(Rescued(side, replaced=False))
@@ -837,7 +838,7 @@ class Repository:
     def changes_a_pull_would_replace(self, target: Manifest) -> list[str]:
         """Files edited here since the last sync that the new version also changes.
 
-        Work that only exists on this Mac — a new recording nobody else has
+        Work that only exists on this computer — a new recording nobody else has
         touched — is never at risk, so it is not reported.
         """
         base = self.base_files()

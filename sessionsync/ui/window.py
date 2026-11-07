@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from sessionsync.auth.identity import load_identity
-from sessionsync.core import locations
+from sessionsync.core import locations, osinfo
 from sessionsync.core.localstate import LocalState
 from sessionsync.ui import hubsync, theme
 from sessionsync.ui.notify import Notifier
@@ -154,7 +154,7 @@ class MainWindow(QMainWindow):
         history.triggered.connect(lambda: self._with_current(ProjectPane.show_history))
         menu.addAction(history)
 
-        reveal = QAction("Reveal in &Finder", self)
+        reveal = QAction(f"Reveal in &{osinfo.FILE_MANAGER}", self)
         reveal.triggered.connect(lambda: self._with_current(ProjectPane.reveal))
         menu.addAction(reveal)
 
@@ -444,7 +444,7 @@ class MainWindow(QMainWindow):
         self.start.refresh()
 
     def add_project(self, hub) -> None:
-        """Put a project from this Mac into a collaborator's shared folder."""
+        """Put a project from this computer into a collaborator's shared folder."""
         folder = QFileDialog.getExistingDirectory(
             self, f"Choose the Ableton project to add to {hub.name}"
         )
@@ -620,7 +620,7 @@ class MainWindow(QMainWindow):
         self._show_start_if_empty()
 
     def _confirm_close(self, pane: ProjectPane) -> str:
-        """Ask before walking away from work that only exists on this Mac."""
+        """Ask before walking away from work that only exists on this computer."""
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
         box.setText(f"{pane.project_name} has changes that are not pushed.")

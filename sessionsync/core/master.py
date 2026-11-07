@@ -4,7 +4,7 @@ Three situations, all ending in the same place (a shared copy in Drive and a
 working copy anywhere):
 
 - the project already sits in the Drive folder  -> `adopt` it, then `get_workbench`
-- the project only exists on this Mac           -> `add_local_project`
+- the project only exists on this computer           -> `add_local_project`
 - you want your own copy of a shared one        -> `get_workbench`
 """
 
@@ -105,7 +105,7 @@ def get_workbench(master_folder: Path, destination: Path, *, author: dict) -> Re
 def add_local_project(
     local_folder: Path, hub_folder: Path, *, author: dict, name: str | None = None
 ) -> Repository:
-    """Put a project that only exists on this Mac into the shared folder.
+    """Put a project that only exists on this computer into the shared folder.
 
     The local folder becomes the working copy. Nothing is created in the
     shared folder unless the project is valid and the name is free.

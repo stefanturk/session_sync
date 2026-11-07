@@ -18,7 +18,7 @@ def push_preview(snapshot) -> tuple[list[str], list[str]]:
     """(lines to show, reasons Push cannot go) for the Push dialog.
 
     Push always consolidates first: only what the Live Sets use is sent, sounds
-    from elsewhere on this Mac are copied in, and unused audio stays here.
+    from elsewhere on this computer are copied in, and unused audio stays here.
     """
     from sessionsync.ui.presenter import human_size
 
@@ -29,13 +29,13 @@ def push_preview(snapshot) -> tuple[list[str], list[str]]:
     ]
     if snapshot.media_outside:
         lines.append(
-            f"Copying in {_files(len(snapshot.media_outside))} from elsewhere on this Mac "
+            f"Copying in {_files(len(snapshot.media_outside))} from elsewhere on this computer "
             "(into Samples/Imported), so everyone hears them."
         )
     if snapshot.unused:
         lines.append(
             f"Leaving {_files(len(snapshot.unused))} the song does not use "
-            f"({human_size(snapshot.unused_bytes)}) on this Mac only."
+            f"({human_size(snapshot.unused_bytes)}) on this computer only."
         )
     if snapshot.media_missing:
         lines.append(

@@ -479,7 +479,7 @@ class ProjectPane(QWidget):
         if snapshot.media_missing:
             parts.append(
                 f"⚠  {len(snapshot.media_missing)} file(s) the song uses cannot be found on "
-                "this Mac at all."
+                "this computer at all."
             )
         self.media_label.setText("  ".join(parts))
         self.media_label.setVisible(bool(parts))

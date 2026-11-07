@@ -194,7 +194,7 @@ class TestTimes:
 
         result = run("history", "--project", synced)
 
-        expected = datetime.now().astimezone().strftime("%d %b %Y, %-I:%M")
+        expected = datetime.now().astimezone().strftime("%d %b %Y, %#I:%M" if __import__("sys").platform == "win32" else "%d %b %Y, %-I:%M")
         assert expected in result.stdout
 
 

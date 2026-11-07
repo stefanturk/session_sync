@@ -108,7 +108,7 @@ class Settings:
         self._write({**self._read(), "local_root": str(path)})
 
     def song_path(self, hub: Hub, song: str) -> Path:
-        """Where this song lives on this Mac: recorded when joined or shared,
+        """Where this song lives on this computer: recorded when joined or shared,
         otherwise the standard place under the local root."""
         recorded = self._read().get("song_paths", {}).get(f"{hub.path}|{song}")
         return Path(recorded) if recorded else hub.local_path(song, self.local_root())

@@ -13,6 +13,7 @@ import typer
 
 from sessionsync.adapters.ableton.adapter import AbletonAdapter
 from sessionsync.auth.identity import load_identity, save_identity
+from sessionsync.core import osinfo
 from sessionsync.core.errors import SessionSyncError
 from sessionsync.core.repository import Repository
 from sessionsync.core.session import describe_sessions
@@ -48,7 +49,7 @@ def local_time(timestamp: str | None) -> str:
         return timestamp
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone().strftime("%d %b %Y, %-I:%M %p")
+    return osinfo.strftime(parsed.astimezone(), "%d %b %Y, %-I:%M %p")
 
 
 def warn_about_media(repo: Repository) -> None:
@@ -74,18 +75,18 @@ def describe_plan(plan) -> None:
         typer.echo(f"\n  Cannot push: {problem}")
     if plan.imported:
         typer.echo(
-            f"\n  From elsewhere on this Mac ({len(plan.imported)}, "
+            f"\n  From elsewhere on this computer ({len(plan.imported)}, "
             f"{human_size(plan.imported_bytes)}) — copied into Samples/Imported on Push:"
         )
         _first_few([str(p) for p in plan.imported.values()])
     if plan.unused:
         typer.echo(
             f"\n  Not used by any Live Set ({len(plan.unused)}, {human_size(plan.unused_bytes)}) "
-            "— stays on this Mac, not pushed:"
+            "— stays on this computer, not pushed:"
         )
         _first_few(plan.unused)
     if plan.missing:
-        typer.echo(f"\n  Used by the song but nowhere on this Mac ({len(plan.missing)}):")
+        typer.echo(f"\n  Used by the song but nowhere on this computer ({len(plan.missing)}):")
         _first_few(plan.missing)
     if plan.skipped_sets:
         typer.echo("\n  Live 10 Sets left out (re-save them in Live 11 to share them):")
@@ -156,9 +157,9 @@ def init(
 @app.command()
 def clone(
     remote: Path = typer.Argument(..., help="The repository location."),
-    project: Path = typer.Argument(..., help="Where to put the project on this Mac."),
+    project: Path = typer.Argument(..., help="Where to put the project on this computer."),
 ) -> None:
-    """Download someone else's project onto this Mac."""
+    """Download someone else's project onto this computer."""
     try:
         repo = Repository.clone(
             storage_from_location(str(remote)), project, author=load_identity()
@@ -246,7 +247,7 @@ def push(
 ) -> None:
     """Consolidate, then publish this session's work as the new current version.
 
-    Only the files the Live Sets use are sent. Sounds from elsewhere on this Mac
+    Only the files the Live Sets use are sent. Sounds from elsewhere on this computer
     are copied into the shared copy's Samples/Imported, and the main Set is saved
     into Past Revisions.
     """
@@ -281,10 +282,10 @@ def push(
     plan = repo.last_plan
     if plan is not None:
         if plan.imported:
-            typer.echo(f"  Copied in from elsewhere on this Mac: {len(plan.imported)}")
+            typer.echo(f"  Copied in from elsewhere on this computer: {len(plan.imported)}")
         if plan.unused:
             typer.echo(
-                f"  Left on this Mac (unused): {len(plan.unused)} ({human_size(plan.unused_bytes)})"
+                f"  Left on this computer (unused): {len(plan.unused)} ({human_size(plan.unused_bytes)})"
             )
         if plan.missing:
             typer.echo(f"  Missing here, so not shared: {len(plan.missing)}")
@@ -317,7 +318,7 @@ def pull(project: Path = PROJECT_OPTION) -> None:
     typer.echo(f"Updated to v{result.to_version}.")
     _print_files("Added", result.diff.added)
     _print_files("Updated", result.diff.modified)
-    _print_files("No longer used (left on this Mac)", result.diff.deleted)
+    _print_files("No longer used (left on this computer)", result.diff.deleted)
 
 
 @app.command()
@@ -354,8 +355,6 @@ def open_rev(
     no_open: bool = typer.Option(False, "--no-open", help="Get it ready but do not open Live."),
 ) -> None:
     """Open an old revision in Live, fetching any audio it needs first."""
-    import subprocess
-    import sys
 
     repo = _open(project)
     try:
@@ -369,8 +368,8 @@ def open_rev(
             f"Some of Rev {version}'s audio is different here now, so it was built as a "
             f"separate copy: {live_set}"
         )
-    if not no_open and sys.platform == "darwin":
-        subprocess.run(["open", str(live_set)], check=False)
+    if not no_open:
+        osinfo.open_with_default_app(live_set)
 
 
 @app.command("open")
@@ -379,8 +378,6 @@ def open_live(
     no_open: bool = typer.Option(False, "--no-open", help="Only say which set it would open."),
 ) -> None:
     """Open your copy of the song in Live (never the shared copy in Drive)."""
-    import subprocess
-    import sys
 
     repo = _open(project)
     try:
@@ -392,8 +389,8 @@ def open_live(
         typer.echo(f"Note: you are {behind} version(s) behind — `sessionsync pull` first.")
     typer.echo(f"Opening {target}")
     repo.refresh_presence(live_here=True)
-    if not no_open and sys.platform == "darwin":
-        subprocess.run(["open", str(target)], check=False)
+    if not no_open:
+        osinfo.open_with_default_app(target)
 
 
 @app.command()
@@ -568,7 +565,7 @@ def song_add(
     project: Path = typer.Argument(..., help="Your Ableton project folder."),
     name: str = typer.Option(None, "--name", help="Song name (default: the project folder name)."),
 ) -> None:
-    """Add a project from this Mac to a shared folder (your folder becomes your working copy)."""
+    """Add a project from this computer to a shared folder (your folder becomes your working copy)."""
     song_new(hub_name, project, name)
 
 
@@ -578,7 +575,7 @@ def song_get(
     song: str = typer.Argument(..., help="The song to get."),
     to: Path = typer.Option(None, "--to", help="Where to put your copy (anywhere)."),
 ) -> None:
-    """Make your own working copy of a shared song, anywhere on this Mac."""
+    """Make your own working copy of a shared song, anywhere on this computer."""
     hub = _find_hub(hub_name)
     settings = _settings()
     try:
@@ -594,7 +591,7 @@ def song_join(
     hub_name: str = typer.Argument(..., help="Which shared folder."),
     song: str = typer.Argument(..., help="The song to download."),
 ) -> None:
-    """Download a song from a shared folder onto this Mac."""
+    """Download a song from a shared folder onto this computer."""
     hub = _find_hub(hub_name)
     try:
         repo = hub.join_song(song, _settings().local_root(), load_identity())

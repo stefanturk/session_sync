@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from sessionsync.core import osinfo
 from sessionsync.core.manifest import FileEntry, diff_file_maps
 from sessionsync.core.repository import Status
 from sessionsync.ui.presenter import close_warning, notifications, screen
@@ -101,7 +102,7 @@ def test_the_header_names_unpushed_work():
 def test_the_song_open_in_live_is_stated_in_the_header():
     model = screen(make_status("up_to_date"), project_name="X", live_open=True)
     assert model.state_label == "OPEN IN LIVE"
-    assert "press ⌘S" in model.changes_hint  # unsaved work in Live is invisible to us
+    assert f"press {osinfo.SAVE_KEYS}" in model.changes_hint  # unsaved work in Live is invisible to us
 
 
 def test_live_open_on_an_old_version_is_an_alarm():

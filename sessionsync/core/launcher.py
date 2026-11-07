@@ -19,14 +19,17 @@ from urllib.parse import parse_qs, quote, urlparse
 
 SCHEME = "sessionsync"
 MAC_LAUNCHER = "▶ Open in Live.webloc"
+#: Windows hides the .url ending, so this shows as "▶ Open in Live (Windows)".
+WINDOWS_LAUNCHER = "▶ Open in Live (Windows).url"
 READ_ME = "Read me.txt"
-FRONT_DOOR = (MAC_LAUNCHER, READ_ME)
+FRONT_DOOR = (MAC_LAUNCHER, WINDOWS_LAUNCHER, READ_ME)
 
 READ_ME_TEXT = """\
 This folder is the SHARED copy of "{song}". Please don't open anything in here.
 
-To work on the song, double-click "▶ Open in Live". Session Sync opens YOUR own
-copy (on your computer, not in Drive), and gets the latest version first.
+To work on the song, double-click "▶ Open in Live" (on a Mac) or
+"▶ Open in Live (Windows)" (on a PC). Session Sync opens YOUR own copy (on your
+computer, not in Drive), and gets the latest version first.
 
 No Session Sync yet? Ask whoever shared this folder with you for the app.
 """
@@ -66,7 +69,30 @@ def write_front_door(song_folder: Path, repository_id: str, song: str) -> None:
         song_folder / MAC_LAUNCHER,
         plistlib.dumps({"URL": link_for(repository_id, song)}),
     )
+    _write_if_changed(song_folder / WINDOWS_LAUNCHER, windows_shortcut(link_for(repository_id, song)))
     _write_if_changed(song_folder / READ_ME, READ_ME_TEXT.format(song=song).encode("utf-8"))
+
+
+def windows_shortcut(url: str) -> bytes:
+    """An Internet Shortcut: what Windows makes when you drag a link to the Desktop."""
+    return f"[InternetShortcut]\r\nURL={url}\r\n".encode("ascii")
+
+
+def read_link(path: Path) -> str | None:
+    """The link inside either kind of launcher file."""
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return None
+    if Path(path).suffix == ".webloc":
+        try:
+            return plistlib.loads(data).get("URL")
+        except Exception:  # noqa: BLE001 - a damaged file is just "no link"
+            return None
+    for line in data.decode("utf-8", errors="replace").splitlines():
+        if line.startswith("URL="):
+            return line[4:].strip()
+    return None
 
 
 def _write_if_changed(path: Path, data: bytes) -> None:

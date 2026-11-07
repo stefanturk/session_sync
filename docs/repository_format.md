@@ -121,6 +121,7 @@ so double-clicking in Drive never opens (and saves over) the shared copy:
 ```
 My Song/
   ▶ Open in Live.webloc         sessionsync://open?repo=<repository_id>&song=<name>
+  ▶ Open in Live (Windows).url  the same link as an [InternetShortcut] (URL=…)
   Read me.txt
   Song data — managed by Session Sync/
     My Song.als-shared          the current revision, as Consolidate prepared it

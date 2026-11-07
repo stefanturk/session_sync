@@ -47,7 +47,7 @@ def test_check_hubs_reports_and_pulls_closed_songs(tmp_path, monkeypatch):
     messages = [n.text for n in news]
     assert "Sam added a new song: Song B" in messages
     mine = [m for m in messages if "Song A" in m][0]
-    assert mine.startswith("Bob on Song A:") and "Added Sax" in mine and mine.endswith("(updated on this Mac)")
+    assert mine.startswith("Bob on Song A:") and "Added Sax" in mine and mine.endswith("(updated on this computer)")
 
     me = Repository.open(settings.song_path(hub, "Song A"), author=ALICE, storage=hub.storage_for("Song A"))
     assert me.base_version == 3
@@ -63,7 +63,7 @@ def test_open_songs_and_unpushed_work_are_not_pulled(tmp_path, monkeypatch):
     sam.push()
 
     msgs = hubsync.check_hubs(settings, ALICE, open_roots={mine_path})
-    assert msgs and "updated on this Mac" not in msgs[0].text and msgs[0].path == mine_path
+    assert msgs and "updated on this computer" not in msgs[0].text and msgs[0].path == mine_path
     assert Repository.open(mine_path, author=ALICE, storage=hub.storage_for("S")).base_version == 1
 
 

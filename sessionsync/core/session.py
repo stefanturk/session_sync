@@ -12,6 +12,8 @@ import socket
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from sessionsync.core import osinfo
+
 # A heartbeat is refreshed every minute; allow generous slack for a laptop that
 # slept or a slow connection before we stop calling a session active.
 HEARTBEAT_SECONDS = 60
@@ -104,14 +106,14 @@ def _friendly_day(timestamp: str | None) -> str | None:
     parsed = _parse(timestamp)
     if parsed is None:
         return None
-    return parsed.astimezone().strftime("%a %-I:%M %p")
+    return osinfo.strftime(parsed.astimezone(), "%a %-I:%M %p")
 
 
 def _friendly_time(timestamp: str | None) -> str | None:
     parsed = _parse(timestamp)
     if parsed is None:
         return None
-    return parsed.astimezone().strftime("%-I:%M %p")
+    return osinfo.strftime(parsed.astimezone(), "%-I:%M %p")
 
 
 def _parse(timestamp: str | None):

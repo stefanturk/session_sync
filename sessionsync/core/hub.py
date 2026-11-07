@@ -8,7 +8,7 @@ just a folder, so it works with whatever keeps it in step between computers
 (Google Drive for desktop).
 
 Scanning never writes: on a synced folder, even creating an empty directory
-would be uploaded and show up on everyone else's Mac.
+would be uploaded and show up on everyone else's computer.
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ class Hub:
     # --- acting ----------------------------------------------------------
 
     def add_song(self, song_name: str, project: Path, author: dict, *, note: str | None = None) -> Repository:
-        """Copy a project that lives on this Mac into the hub; it becomes the working copy."""
+        """Copy a project that lives on this computer into the hub; it becomes the working copy."""
         return master.add_local_project(Path(project), self.path, author=author, name=song_name)
 
     def join_song(self, song_name: str, local_base: Path, author: dict, destination: Path | None = None) -> Repository:

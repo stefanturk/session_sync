@@ -108,6 +108,7 @@ def test_the_notifier_reports_the_target_that_was_clicked(qt_app):
     assert got == ["song-a"]
 
 
+@pytest.mark.skipif(__import__("sys").platform != "darwin", reason="the plain banner is the Mac's")
 def test_the_notifier_uses_the_plain_banner_when_there_is_no_tray(qt_app, monkeypatch, no_real_notifications):
     monkeypatch.delenv("SESSIONSYNC_NO_NOTIFY", raising=False)
     from PySide6.QtWidgets import QSystemTrayIcon

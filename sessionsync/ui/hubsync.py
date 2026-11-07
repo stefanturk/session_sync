@@ -1,4 +1,4 @@
-"""What the shared folders mean for this Mac: song rows, news, and safe auto-pulls.
+"""What the shared folders mean for this computer: song rows, news, and safe auto-pulls.
 
 No Qt in here, so all of it is unit tested. The window calls these on a timer
 and just shows what comes back.
@@ -22,7 +22,7 @@ class News:
     text: str
     hub: Hub
     song: str
-    path: Path | None  # the song's folder on this Mac, if it has one
+    path: Path | None  # the song's folder on this computer, if it has one
 
     def __str__(self) -> str:
         return self.text
@@ -52,7 +52,7 @@ class SongRow:
         if self.state == "ready":
             return "Ready to add · Pull"
         if self.state == "new":
-            return "Not on this Mac yet · Pull"
+            return "Not on this computer yet · Pull"
         if self.state == "behind":
             n = self.behind_by
             return f"{n} newer version{'s' if n != 1 else ''} to get"
@@ -153,7 +153,7 @@ def check_hubs(settings: Settings, author: dict, open_roots: set[Path] | None = 
             pulled = _auto_pull(hub, event.song, settings, author, open_roots)
             who = event.authors[-1]
             what = " · ".join(dict.fromkeys(event.summaries)) or "new version"
-            tail = " (updated on this Mac)" if pulled else ""
+            tail = " (updated on this computer)" if pulled else ""
             local = settings.song_path(hub, event.song)
             messages.append(
                 News(f"{who} on {event.song}: {what}{tail}", hub, event.song, local if local.is_dir() else None)
