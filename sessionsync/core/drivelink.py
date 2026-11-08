@@ -181,3 +181,27 @@ def find_shared_folders(roots: list[Path] | None = None, *, depth: int = 3, limi
             continue
         queue += [(c, level + 1) for c in children if c.name != "Trash"]
     return found  # one per real folder: the same folder seen by two paths is visited once
+
+
+def uploads_pending() -> tuple[int, int] | None:
+    """(files, bytes) Google Drive for desktop still has to upload from this
+    computer, read from its own queue. None when that cannot be told (no Drive,
+    or a version of Drive that keeps it elsewhere). Bytes are 0 when unknown."""
+    files = size = 0
+    known = False
+    for account in (drivefs_dir().glob("*") if drivefs_dir().is_dir() else []):
+        mirror = account / "mirror_sqlite.db"  # "Mirror files" mode
+        if mirror.exists():
+            rows = _query(mirror, "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM queued_uploads")
+            rows2 = _query(mirror, "SELECT COUNT(*) FROM pending_uploads")
+            if rows:
+                known = True
+                files += rows[0][0] + (rows2[0][0] if rows2 else 0)
+                size += rows[0][1]
+        stream = account / "metadata_sqlite_db"  # "Stream files" mode: changes not yet sent
+        if stream.exists():
+            rows = _query(stream, "SELECT COUNT(*) FROM operations")
+            if rows:
+                known = True
+                files += rows[0][0]
+    return (files, size) if known else None

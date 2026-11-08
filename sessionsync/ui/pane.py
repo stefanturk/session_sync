@@ -116,6 +116,8 @@ class ProjectPane(QWidget):
         self._ask_after_live_closed = False
         self._busy = False
         self._push_note: str | None = None        # the note of the push in progress
+        self._upload_watch = None                 # QTimer while Drive uploads a push
+        self._upload_ticks = 0
         self._push_when_closed: str | None = None  # Live held a file: push once it lets go
 
         self._build()
@@ -719,6 +721,7 @@ class ProjectPane(QWidget):
                 f"Pushed as v{result.version} — {human_size(result.uploaded_bytes)} sent.",
                 15000,
             )
+            self._watch_drive_upload(result.version)
         elif name == "pull":
             self.pulled.emit()
             if result.to_version == result.from_version:
@@ -752,6 +755,42 @@ class ProjectPane(QWidget):
         elif name == "restore":
             self._say(f"Restored a copy to {result}.", 15000)
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.parent)))
+
+    def _watch_drive_upload(self, version: int) -> None:
+        """After a push: say how much Google Drive still has to upload, then when
+        it is done (that is when the others can pull)."""
+        from sessionsync.core import drivelink
+
+        if drivelink.uploads_pending() is None:
+            return  # no Drive here, or one whose queue cannot be read
+        if self._upload_watch is not None:  # a newer push: watch that one instead
+            self._upload_watch.stop()
+            self._upload_watch.deleteLater()
+        timer = self._upload_watch = QTimer(self)
+        timer.setInterval(5000)
+        self._upload_ticks = 0
+        seen_work = [False]
+
+        def tick():
+            self._upload_ticks += 1
+            pending = drivelink.uploads_pending()
+            if pending is None or self._upload_ticks > 1440:  # 2 hours: stop asking
+                timer.stop()
+                return
+            files, size = pending
+            if files:
+                seen_work[0] = True
+                amount = f" ({human_size(size)})" if size else ""
+                self._say(
+                    f"Google Drive is still uploading {files} file{'s' if files != 1 else ''}{amount} "
+                    f"from this computer. The others can pull v{version} when it's done."
+                )
+            elif seen_work[0] or self._upload_ticks >= 3:
+                timer.stop()
+                self._say(f"Google Drive has uploaded v{version} — the others can pull it now.", 20000)
+
+        timer.timeout.connect(tick)
+        timer.start()
 
     def _show_rescued(self, rescued) -> None:
         if not rescued:
@@ -912,6 +951,8 @@ class ProjectPane(QWidget):
         """Stop this project cleanly. Called by the shell when a tab closes."""
         self.timer.stop()
         self.heartbeat_timer.stop()
+        if self._upload_watch is not None:
+            self._upload_watch.stop()
 
         if end_session:
             self._end_session_before_closing()

@@ -60,3 +60,16 @@ def test_the_invite_says_everything_needed():
     assert "https://drive.google.com/drive/folders/x" in text and "Add shortcut" in text
     assert "install.ps1" in text and "install.sh" in text and "session_sync" in text
     assert "Connect a shared folder" in text
+
+
+def test_drives_upload_queue_is_read(tmp_path, monkeypatch):
+    account = tmp_path / "fs" / "123"
+    account.mkdir(parents=True)
+    with sqlite3.connect(account / "mirror_sqlite.db") as conn:
+        conn.execute("CREATE TABLE queued_uploads (stable_id INTEGER, local_stable_id INTEGER, size INTEGER, md5_checksum TEXT, mtime_ms INTEGER)")
+        conn.execute("CREATE TABLE pending_uploads (local_stable_id INTEGER, stable_id INTEGER)")
+        conn.executemany("INSERT INTO queued_uploads VALUES (?,?,?,?,?)", [(1, 1, 1000, "", 0), (2, 2, 500, "", 0)])
+    monkeypatch.setattr(drivelink, "drivefs_dir", lambda: tmp_path / "fs")
+    assert drivelink.uploads_pending() == (2, 1500)
+    monkeypatch.setattr(drivelink, "drivefs_dir", lambda: tmp_path / "none")
+    assert drivelink.uploads_pending() is None

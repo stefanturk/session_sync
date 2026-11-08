@@ -47,6 +47,7 @@ from sessionsync.core.manifest import (
 from sessionsync.storage.base import NotReadyError, StorageProvider, VersionAlreadyExistsError
 
 REPOSITORY_FORMAT_VERSION = 2
+PULL_WORKERS = 4  # files copied at once on a pull
 
 
 @dataclass
@@ -1084,9 +1085,12 @@ class Repository:
             unready = waiting(target.files)
             if unready:
                 shown = ", ".join(unready[:2]) + (" and more" if len(unready) > 2 else "")
+                who = (target.author or {}).get("name") or "The latest"
+                whose = f"{who}'s" if target.author else who
                 raise NotReadyError(
-                    f"Google Drive is still syncing {len(unready)} file(s) ({shown}). "
-                    "Try again in a minute."
+                    f"{whose} v{target_version} is still arriving through Google Drive: "
+                    f"{len(unready)} of {len(target.files)} files are not on this computer yet "
+                    f"({shown}). Try again in a minute — nothing was changed."
                 )
 
         trash = self._new_trash_folder()
@@ -1103,22 +1107,46 @@ class Repository:
                     continue  # locally edited, and this version does not change it
             wanted.append((path, entry))
         total_bytes = sum(entry.size for _, entry in wanted)
-        for number, (path, entry) in enumerate(wanted, 1):
+        for path, _ in wanted:
             local = self.project_root / path
-            if progress is not None:
-                progress(Progress(number, len(wanted), downloaded, total_bytes, path, entry.size))
             if local.exists():
                 self._to_trash(local, trash)
+
+        def fetch(item):
+            path, entry = item
+            local = self.project_root / path
+            self.storage.download_object(entry.sha256, local)
+            self.hash_cache.remember(local, entry.sha256)  # copied and verified: never read again
+            return path, entry
+
+        # Several at once: Google Drive streams each file it is asked for, so
+        # asking for four keeps the line full instead of one file at a time.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        done = 0
+        if progress is not None and wanted:
+            progress(Progress(1, len(wanted), 0, total_bytes, wanted[0][0], wanted[0][1].size))
+        with ThreadPoolExecutor(max_workers=PULL_WORKERS) as pool:
+            futures = [pool.submit(fetch, item) for item in wanted]
             try:
-                self.storage.download_object(entry.sha256, local)
+                for future in as_completed(futures):
+                    path, entry = future.result()
+                    self._for_this_computer(self.project_root / path, entry)
+                    downloaded += entry.size
+                    done += 1
+                    if progress is not None and done < len(wanted):
+                        progress(Progress(done + 1, len(wanted), downloaded, total_bytes, path, entry.size))
             except NotReadyError:
+                for f in futures:
+                    f.cancel()
                 edits = self.drive_edits()
                 if edits:
                     raise DriveEditsError(edits) from None
                 raise
-            self.hash_cache.remember(local, entry.sha256)  # copied and verified: never read again
-            self._for_this_computer(local, entry)
-            downloaded += entry.size
+            except BaseException:
+                for f in futures:
+                    f.cancel()
+                raise
 
         # A set the new version dropped (merged back into the song's set) goes to
         # the trash if it is exactly what was shared, so it is not pushed again.

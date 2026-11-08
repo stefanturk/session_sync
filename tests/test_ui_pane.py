@@ -261,3 +261,18 @@ def test_a_push_live_still_holds_waits_and_goes_when_the_song_closes(pane, alice
     assert pushed == ["bass idea"]
     pane._show(replace(snap, live_open=False))
     assert pushed == ["bass idea"]  # once only
+
+
+def test_after_a_push_the_tab_says_when_drive_has_uploaded_it(pane, monkeypatch):
+    from sessionsync.core import drivelink
+
+    queue = [(3, 2048), (1, 1024), (0, 0)]
+    monkeypatch.setattr(drivelink, "uploads_pending", lambda: queue[0] if queue else (0, 0))
+    pane._watch_drive_upload(4)
+    pane._upload_watch.timeout.emit()
+    assert "still uploading 3 files" in pane.status_line.text()
+    queue.pop(0)
+    queue.pop(0)
+    pane._upload_watch.timeout.emit()
+    assert "has uploaded v4" in pane.status_line.text()
+    assert not pane._upload_watch.isActive()
