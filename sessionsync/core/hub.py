@@ -50,6 +50,7 @@ class HubEvent:
     versions: list[int] = field(default_factory=list)
     summaries: list[str] = field(default_factory=list)
     authors: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
 
 class Hub:
@@ -165,7 +166,7 @@ def compare_scans(
             events.append(HubEvent("new_song", song.name, [song.latest_version]))
         elif song.latest_version > before:
             storage = hub.storage_for(song.name)
-            versions, summaries, authors = [], [], []
+            versions, summaries, authors, notes = [], [], [], []
             reached = before
             prior = Manifest.from_json(storage.read_manifest(before)) if before else None
             for v in range(before + 1, song.latest_version + 1):
@@ -180,10 +181,12 @@ def compare_scans(
                     versions.append(v)
                     summaries.append(describe_version(prior, manifest))
                     authors.append(who.get("name") or who.get("email") or "Someone")
+                    if manifest.note:
+                        notes.append(manifest.note)
                 prior = manifest
             current[song.name] = reached
             if versions:
-                events.append(HubEvent("new_versions", song.name, versions, summaries, authors))
+                events.append(HubEvent("new_versions", song.name, versions, summaries, authors, notes))
     return events, current
 
 

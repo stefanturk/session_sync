@@ -94,6 +94,8 @@ class ProjectPane(QWidget):
     request_open_revision = Signal(int)
     request_make_latest = Signal(int)
     request_reshare = Signal()
+    pulled = Signal()  # this copy caught up: the feed's Pull links for it are done
+    news = Signal(str)  # something worth telling: the window notifies and logs it
     request_catch_up = Signal()
 
     #: level, state_label — so the shell can colour the tab and title the window
@@ -105,6 +107,8 @@ class ProjectPane(QWidget):
         self.previous_status = None
         #: set by the window so banners are clickable; None = plain banner
         self.notifier = None
+        self.in_hub = False  # the window's shared-folder check reports this song's pushes
+        self.reports_news = False  # the window takes `news`, notifies and keeps it in Activity
         self.snapshot: Snapshot | None = None
         self._checking_now = False
         self._open_after_pull = False
@@ -475,7 +479,11 @@ class ProjectPane(QWidget):
         self.last_push_label.setText(model.last_push)
 
         for message in notifications(self.previous_status, snapshot.status):
-            if self.notifier is not None:
+            if self.in_hub and message.startswith("A new version"):
+                continue  # told by the shared-folder check, with who and what
+            if self.reports_news:
+                self.news.emit(message)
+            elif self.notifier is not None:
                 self.notifier.show(message, title=snapshot.project_name, target=self.project_root)
             else:
                 notify(message, title=snapshot.project_name)
@@ -712,6 +720,7 @@ class ProjectPane(QWidget):
                 15000,
             )
         elif name == "pull":
+            self.pulled.emit()
             if result.to_version == result.from_version:
                 self._say("Already on the latest version.", 8000)
             else:

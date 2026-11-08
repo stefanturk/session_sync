@@ -115,6 +115,38 @@ class Settings:
         self._write({**self._read(), "live_major": major})
         versions.set_preferred_major(major)
 
+    def flag(self, name: str) -> bool:
+        return bool(self._read().get("flags", {}).get(name))
+
+    def set_flag(self, name: str, value: bool = True) -> None:
+        data = self._read()
+        data.setdefault("flags", {})[name] = value
+        self._write(data)
+
+    def activity(self) -> list:
+        """The feed of what collaborators did, newest first (see ui/activity.py)."""
+        from sessionsync.ui import activity
+
+        return activity.load(self._read().get("activity"))
+
+    def add_activity(self, item) -> None:
+        from sessionsync.ui import activity
+
+        data = self._read()
+        data["activity"] = activity.dump(activity.add(activity.load(data.get("activity")), item))
+        self._write(data)
+
+    def mark_pulled(self, local: Path) -> None:
+        """Your copy caught up: the feed's "Pull" links for that song are done."""
+        data = self._read()
+        changed = False
+        for entry in data.get("activity") or []:
+            if entry.get("local") == str(local) and entry.get("kind") == "pushed" and not entry.get("pulled"):
+                entry["pulled"] = True
+                changed = True
+        if changed:
+            self._write(data)
+
     def set_local_root(self, path: Path) -> None:
         self._write({**self._read(), "local_root": str(path)})
 

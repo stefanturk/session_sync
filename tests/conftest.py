@@ -119,6 +119,16 @@ def one_live_version(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_log(monkeypatch, tmp_path):
+    """Tests write their log lines to a pretend log, never the app's real one."""
+    from sessionsync.core import osinfo
+
+    log = tmp_path / "logs" / "SessionSync.log"
+    monkeypatch.setattr(osinfo, "log_file", lambda: log)
+    return log
+
+
+@pytest.fixture(autouse=True)
 def no_real_desktop(monkeypatch, tmp_path):
     """New songs default to the Desktop: in tests that is a pretend one."""
     user = tmp_path / "user-home"

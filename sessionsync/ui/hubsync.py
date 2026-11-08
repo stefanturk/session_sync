@@ -23,6 +23,10 @@ class News:
     hub: Hub
     song: str
     path: Path | None  # the song's folder on this computer, if it has one
+    kind: str = "other"  # "pushed" | "new_song" | "working" | "other"
+    who: str = ""
+    versions: list = field(default_factory=list)
+    pulled: bool = False  # already brought onto this computer
 
     def __str__(self) -> str:
         return self.text
@@ -148,17 +152,32 @@ def check_hubs(settings: Settings, author: dict, open_roots: set[Path] | None = 
         settings.set_seen(hub, seen)
         for event in events:
             if event.kind == "new_song":
-                messages.append(News(f"{hub.name} added a new song: {event.song}", hub, event.song, None))
+                messages.append(
+                    News(f"{hub.name} added a new song: {event.song}", hub, event.song, None, kind="new_song")
+                )
                 continue
             pulled = _auto_pull(hub, event.song, settings, author, open_roots)
-            who = event.authors[-1]
-            what = " · ".join(dict.fromkeys(event.summaries)) or "new version"
-            tail = " (updated on this computer)" if pulled else ""
             local = settings.song_path(hub, event.song)
             messages.append(
-                News(f"{who} on {event.song}: {what}{tail}", hub, event.song, local if local.is_dir() else None)
+                News(
+                    pushed_text(event) + (" (updated on this computer)" if pulled else ""),
+                    hub, event.song, local if local.is_dir() else None,
+                    kind="pushed", who=", ".join(dict.fromkeys(event.authors)),
+                    versions=list(event.versions), pulled=pulled,
+                )
             )
     return messages
+
+
+def pushed_text(event) -> str:
+    """"Sam pushed v4 of Sketches — “bass idea” · Changed Drums, Added Sax"."""
+    who = " & ".join(dict.fromkeys(event.authors)) or "Someone"
+    v = event.versions
+    which = f"v{v[0]}" if len(v) == 1 else f"v{v[0]}–v{v[-1]}"
+    what = [f"“{n}”" for n in dict.fromkeys(event.notes)][-2:]
+    what += list(dict.fromkeys(s for s in event.summaries if s))[-2:]
+    text = f"{who} pushed {which} of {event.song}"
+    return text + (" — " + " · ".join(what) if what else "")
 
 
 def _auto_pull(hub: Hub, song: str, settings: Settings, author: dict, open_roots: set[Path]) -> bool:

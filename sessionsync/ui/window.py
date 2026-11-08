@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEventLoop, QObject, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import QEventLoop, QObject, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -122,6 +122,8 @@ class MainWindow(QMainWindow):
         self.start.song_chosen.connect(self.open_song)
         self.start.live_requested.connect(lambda hub, song: self.open_song(hub, song, open_live=True))
         self.start.add_requested.connect(self.add_project)
+        self.start.activity_action.connect(self.activity_action)
+        self.start.alerts_requested.connect(self.keep_notifications_on_screen)
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self.start)
@@ -207,6 +209,10 @@ class MainWindow(QMainWindow):
 
         pane = ProjectPane(project_root)
         pane.notifier = self.notifier
+        pane.in_hub = any(Path(path).resolve() == project_root for _, path in self.settings.songs())
+        pane.news.connect(lambda message, p=pane: self._pane_news(p, message))
+        pane.reports_news = True
+        pane.pulled.connect(lambda p=pane: (self.settings.mark_pulled(p.project_root), self.start.refresh()))
         pane.state_changed.connect(lambda level, label, p=pane: self._tab_state(p, level, label))
         index = self.tabs.addTab(pane, pane.project_name)
         self.tabs.setTabIcon(index, dot_icon(theme.EDGE_LIT))
@@ -562,10 +568,62 @@ class MainWindow(QMainWindow):
             )
 
     def _hub_news(self, news: list) -> None:
+        from sessionsync.ui.activity import Activity
+
         for item in news:
+            self.settings.add_activity(Activity.from_news(item))
             self.notifier.show(item.text, title=item.hub.name, target=(item.hub, item.song, item.path))
         if news:
             self.start.refresh()
+
+    def _pane_news(self, pane: ProjectPane, message: str) -> None:
+        """Something a song tab noticed (who started working, a new version)."""
+        from sessionsync.ui.activity import Activity
+
+        if "started working" in message:
+            self.settings.add_activity(
+                Activity(
+                    text=message.replace("this project", pane.project_name),
+                    song=pane.project_name, kind="working", local=str(pane.project_root),
+                )
+            )
+            self.start.refresh()
+        self.notifier.show(message, title=pane.project_name, target=pane.project_root)
+
+    def activity_action(self, item, action: str) -> None:
+        """A link in the Activity feed: open the song, pull it, or see what changed."""
+        hub = next((h for h in self.settings.hubs() if str(h.path) == item.hub), None)
+        local = Path(item.local) if item.local else None
+        if local is None or not LocalState.exists(local):
+            if hub is not None and item.song:
+                self.open_song(hub, item.song)
+            return
+        pane = self.open_project(local)
+        if pane is None:
+            return
+        self.stack.setCurrentWidget(self.tabs)
+        if action == "pull":
+            pane.request_pull.emit(False)
+        elif action == "history":
+            pane.show_history()
+
+    def keep_notifications_on_screen(self) -> None:
+        """macOS shows banners for a few seconds; "Alerts" stay until clicked."""
+        import sys
+
+        self.settings.set_flag("alerts_offered")
+        if sys.platform == "darwin":
+            QDesktopServices.openUrl(
+                QUrl("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.stefan.sessionsync")
+            )
+            QMessageBox.information(
+                self,
+                "Keep notifications on screen",
+                "In System Settings › Notifications › SessionSync, set the style to "
+                "“Alerts”. Then a notification stays until you click it, even while "
+                "you're in Live.",
+            )
+        self.start.refresh()
 
     def show_news_target(self, target) -> None:
         """A banner was clicked: go to the song it was about."""

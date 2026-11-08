@@ -47,7 +47,10 @@ def test_check_hubs_reports_and_pulls_closed_songs(tmp_path, monkeypatch):
     messages = [n.text for n in news]
     assert "Sam added a new song: Song B" in messages
     mine = [m for m in messages if "Song A" in m][0]
-    assert mine.startswith("Bob on Song A:") and "Added Sax" in mine and mine.endswith("(updated on this computer)")
+    assert mine.startswith("Bob pushed v2–v3 of Song A — ") and "Added Sax" in mine
+    assert mine.endswith("(updated on this computer)")
+    pushed = [n for n in news if n.kind == "pushed"][0]
+    assert pushed.who == "Bob" and pushed.versions == [2, 3] and pushed.pulled
 
     me = Repository.open(settings.song_path(hub, "Song A"), author=ALICE, storage=hub.storage_for("Song A"))
     assert me.base_version == 3

@@ -190,3 +190,52 @@ def test_a_moved_copy_is_noticed(world, monkeypatch):
 def test_links_that_are_not_ours_are_not_handled(world):
     window, _, _ = world
     assert window.open_link("https://example.com") is False
+
+
+# --- the Activity feed -------------------------------------------------------------
+
+
+def test_a_push_by_a_collaborator_lands_in_activity_with_links_that_work(world, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QPushButton
+
+    from tests.conftest import record
+
+    window, settings, hub = world
+    window.open_song(hub, "Song B")
+    pane = window.tabs.widget(0)
+    assert pane.in_hub
+    hubsync.check_hubs(settings, {"name": "Alice", "email": "alice@example.com"})  # the starting point
+    sam = hub.join_song("Song B", tmp_path / "sam2", BOB)
+    record(sam.project_root, "Samples/Recorded/Sax.wav", b"sax")
+    sam.push(note="sax idea")
+
+    window._hub_news(hubsync.check_hubs(settings, {"name": "Alice", "email": "alice@example.com"},
+                                        open_roots={pane.project_root}))
+
+    feed = settings.activity()
+    assert feed[0].text.startswith("Bob pushed v2 of Song B — “sax idea”")
+    assert [label for label, _ in feed[0].links()] == ["Pull", "See changes"]
+    links = [b.text() for b in window.start.findChildren(QPushButton)]
+    assert "Pull" in links and "See changes" in links
+
+    pulled = []
+    pane.request_pull.connect(pulled.append)
+    window.activity_action(feed[0], "pull")
+    assert pulled == [False]
+
+    window._hub_news(hubsync.check_hubs(settings, {"name": "Alice", "email": "alice@example.com"}))
+    assert len(settings.activity()) == 1  # nothing new: nothing added
+    settings.mark_pulled(pane.project_root)
+    assert [label for label, _ in settings.activity()[0].links()] == ["Open song", "See changes"]
+
+
+def test_activity_keeps_one_line_per_push_and_groups_by_day():
+    from sessionsync.ui import activity
+
+    a = activity.Activity("Sam pushed v3", song="S", kind="pushed", versions=[3], at="2026-11-07T10:00:00+00:00")
+    b = activity.Activity("Sam pushed v3 again", song="S", kind="pushed", versions=[3])
+    items = activity.add(activity.add([], a), b)
+    assert [i.text for i in items] == ["Sam pushed v3 again"]
+    items = activity.add(items, a)
+    assert len(activity.grouped(items + [activity.Activity("x", at="2026-11-07T11:00:00+00:00")])) >= 1
+    assert activity.Activity("New", song="S", kind="new_song").links() == [("Get my copy", "open")]

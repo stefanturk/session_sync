@@ -33,6 +33,8 @@ class StartScreen(QWidget):
     song_chosen = Signal(object, str)  # Hub, song name
     live_requested = Signal(object, str)  # Hub, song name: open it in Live straight away
     add_requested = Signal(object)  # Hub
+    activity_action = Signal(object, str)  # Activity, "open" | "pull" | "history"
+    alerts_requested = Signal()  # keep notifications on screen (macOS settings)
 
     def __init__(self, settings: Settings, parent: QWidget | None = None, me: dict | None = None):
         super().__init__(parent)
@@ -77,6 +79,26 @@ class StartScreen(QWidget):
         column.addWidget(self.connect_button)
         column.addSpacing(14)
 
+        heading = QHBoxLayout()
+        self.activity_label = QLabel("ACTIVITY")
+        self.activity_label.setObjectName("silkscreen")
+        heading.addWidget(self.activity_label, 1)
+        self.alerts_button = QPushButton("Keep notifications on screen…")
+        self.alerts_button.setFlat(True)
+        self.alerts_button.setCursor(Qt.PointingHandCursor)
+        self.alerts_button.setStyleSheet("font-size: 11px; padding: 0 4px; text-decoration: underline;")
+        self.alerts_button.setToolTip(
+            "Opens System Settings › Notifications › SessionSync: choose “Alerts” so a "
+            "notification stays until you click it."
+        )
+        self.alerts_button.clicked.connect(self.alerts_requested.emit)
+        heading.addWidget(self.alerts_button)
+        column.addLayout(heading)
+        self.activity = QVBoxLayout()
+        self.activity.setSpacing(2)
+        column.addLayout(self.activity)
+        column.addSpacing(14)
+
         self.recent_label = QLabel("RECENT PROJECTS")
         self.recent_label.setObjectName("silkscreen")
         column.addWidget(self.recent_label)
@@ -113,6 +135,7 @@ class StartScreen(QWidget):
             self.recent.setItemWidget(item, _RecentRow(project))
 
         self._refresh_collaborators()
+        self._refresh_activity()
 
         empty = not projects
         self.recent.setVisible(not empty)
@@ -154,6 +177,29 @@ class StartScreen(QWidget):
         self.collab.setVisible(rows > 0)
         if rows:
             self.collab.setFixedHeight(min(rows, 8) * ROW_HEIGHT + 14)
+
+    def _refresh_activity(self) -> None:
+        """The newest few things collaborators did, by day, each with where to go."""
+        from sessionsync.ui import activity
+
+        while self.activity.count():
+            child = self.activity.takeAt(0)
+            if child.widget() is not None:
+                child.widget().deleteLater()
+        items = self.settings.activity()
+        for day, lines in activity.grouped(items):
+            label = QLabel(day)
+            label.setObjectName("recentPath")
+            self.activity.addWidget(label)
+            for item in lines:
+                self.activity.addWidget(_ActivityRow(item, self.activity_action.emit))
+        shown = bool(items)
+        self.activity_label.setVisible(shown)
+        import sys
+
+        self.alerts_button.setVisible(
+            shown and sys.platform == "darwin" and not self.settings.flag("alerts_offered")
+        )
 
     def _song_activated(self, item: QListWidgetItem) -> None:
         data = item.data(Qt.UserRole)
@@ -227,6 +273,33 @@ class _SongRow(QWidget):
         detail.setObjectName("recentPath")
         detail.setTextFormat(Qt.PlainText)
         column.addWidget(detail)
+
+
+class _ActivityRow(QWidget):
+    """`16:02  Sam pushed v4 of Sketches — “bass idea” · Added Sax   Pull · See changes`"""
+
+    def __init__(self, item, on_action):
+        from sessionsync.ui import activity
+
+        super().__init__()
+        row = QHBoxLayout(self)
+        row.setContentsMargins(4, 1, 4, 1)
+        row.setSpacing(8)
+        when = QLabel(activity.time_label(item.at))
+        when.setObjectName("recentPath")
+        when.setFixedWidth(40)
+        row.addWidget(when)
+        text = QLabel(item.text if len(item.text) <= 110 else item.text[:109] + "…")
+        text.setTextFormat(Qt.PlainText)
+        text.setToolTip(item.text)
+        row.addWidget(text, 1)
+        for label, action in item.links():
+            link = QPushButton(label)
+            link.setFlat(True)
+            link.setCursor(Qt.PointingHandCursor)
+            link.setStyleSheet("font-size: 11px; padding: 0 4px; text-decoration: underline;")
+            link.clicked.connect(lambda _=False, a=action: on_action(item, a))
+            row.addWidget(link)
 
 
 class _RecentRow(QWidget):

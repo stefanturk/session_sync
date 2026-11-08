@@ -78,6 +78,8 @@ class Notifier:
         return tray
 
     def show(self, message: str, *, title: str = "SessionSync", target=None) -> None:
+        from sessionsync.core import osinfo
+
         if self.disabled:
             return
         self._target = target
@@ -86,11 +88,15 @@ class Notifier:
         except Exception:  # noqa: BLE001 - a banner must never break the app
             tray = None
         if tray is None:
+            osinfo.log(f"notify (banner): {title}: {message}")
             notify(message, title=title)
             return
         from PySide6.QtWidgets import QSystemTrayIcon
 
-        tray.showMessage(title, message, QSystemTrayIcon.Information, 10000)
+        osinfo.log(f"notify (tray): {title}: {message}")
+        # 30 s where the system honours it (Windows ignores it; macOS goes by the
+        # style chosen in System Settings — see "Keep notifications on screen").
+        tray.showMessage(title, message, QSystemTrayIcon.Information, 30000)
 
     def _clicked(self) -> None:
         if self.on_click is not None:
