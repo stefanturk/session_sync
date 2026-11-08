@@ -16,7 +16,8 @@ outside sample, a path relative to the Set rather than the project), only the
 copy that goes to the shared folder is rewritten, and it is re-read and checked
 before anything is uploaded. Only Live 11 and newer are rewritten: they store
 paths as plain text. Live 10 hides them in a binary alias that cannot be edited
-safely, so a Live 10 main Set has to be re-saved in a newer Live first.
+safely, so a Live 10 Set is read but never re-pointed: one using sounds from
+outside its project has to be collected in Live first.
 """
 
 from __future__ import annotations
@@ -55,6 +56,9 @@ _VALUE_RE = {
         b"LivePackId", b"OriginalFileSize",
     )
 }
+
+_LIVE10_DIR_RE = re.compile(rb'<RelativePathElement[^>]*?Dir="([^"]*)"')
+_LIVE10_NAME_RE = re.compile(rb'<Name Value="([^"]*)"')
 
 PROJECT_RELATIVE = "3"  # RelativePathType: relative to the project folder
 SET_RELATIVE = "1"      # relative to the folder the Set is in
@@ -160,10 +164,10 @@ def plan_push(
             )
             plan.files[rel] = path  # status still shows it; Push stops
             continue
-        if live_set.major is not None and live_set.major < 11:
+        if live_set.major is not None and live_set.major < 10:
             if rel == main_rel:
                 plan.problems.append(
-                    f"{rel} was saved by Live {live_set.major}. Open it in Live 11 or "
+                    f"{rel} was saved by Live {live_set.major}. Open it in Live 10 or "
                     "newer and save it once, then Push."
                 )
                 plan.files[rel] = path
@@ -225,8 +229,16 @@ def plan_push(
     plan.unused.sort()
 
     # 4. re-point references in the copies that go to the shared folder
+    for live_set in live_sets:
+        if live_set.major is not None and live_set.major < 11 and _needs_rewrite(live_set):
+            plan.problems.append(
+                f"{live_set.rel} (Live {live_set.major}) uses sounds from outside the project "
+                "folder. In Live, choose File › Collect All and Save, then Push."
+            )
     if rewrite and not plan.problems:
         for live_set in live_sets:
+            if live_set.major is not None and live_set.major < 11:
+                continue  # nothing to re-point (checked above)
             new_bytes = _rewrite(project, live_set)
             if new_bytes is None:
                 continue
@@ -277,10 +289,18 @@ def _references(live_set: LiveSet) -> list[Reference]:
     """
     refs = []
     xml = live_set.xml
+    live10 = live_set.major is not None and live_set.major < 11
     for block in _FILE_REF_RE.finditer(xml):
         chunk = block.group(0)
-        relative = _value(chunk, b"RelativePath")
-        absolute = _value(chunk, b"Path")
+        if live10:  # folders as elements plus the file's name; no plain path
+            dirs = [_unescape(d.decode("utf-8", "replace")) for d in _LIVE10_DIR_RE.findall(chunk)]
+            file_name = _LIVE10_NAME_RE.search(chunk)
+            name10 = _unescape(file_name.group(1).decode("utf-8", "replace")) if file_name else ""
+            relative = "/".join(dirs + [name10]) if name10 and b'HasRelativePath Value="true"' in chunk else ""
+            absolute = ""
+        else:
+            relative = _value(chunk, b"RelativePath")
+            absolute = _value(chunk, b"Path")
         name = absolute or relative
         if not name:
             continue
@@ -356,6 +376,14 @@ def _free_imported_name(name: str, sha: str, taken: Mapping[str, str]) -> str:
 
 
 # --- rewriting the shared copy ----------------------------------------------
+
+
+def _needs_rewrite(live_set: LiveSet) -> bool:
+    return any(
+        ref.kind == "outside"
+        or (ref.kind == "inside" and not (ref.ref_type == PROJECT_RELATIVE and normalize_path(ref.relative) == ref.shared))
+        for ref in live_set.refs
+    )
 
 
 def _rewrite(project: Path, live_set: LiveSet) -> bytes | None:

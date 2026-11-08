@@ -768,7 +768,9 @@ class Repository:
         data = local.read_bytes()
         out = data
         mine, theirs = versions.my_live_major(), versions.live_major(data)
-        if mine and theirs and mine != theirs:
+        # Only down: a newer Live opens an older set itself (and its "save as new"
+        # copy is merged back on Push). Making Live 12 sets ourselves is not tried yet.
+        if mine and theirs and mine < theirs:
             try:
                 out = versions.convert(data, mine).data
             except versions.ConversionError as exc:

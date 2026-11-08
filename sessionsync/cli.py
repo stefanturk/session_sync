@@ -89,7 +89,7 @@ def describe_plan(plan) -> None:
         typer.echo(f"\n  Used by the song but nowhere on this computer ({len(plan.missing)}):")
         _first_few(plan.missing)
     if plan.skipped_sets:
-        typer.echo("\n  Live 10 Sets left out (re-save them in Live 11 to share them):")
+        typer.echo("\n  Sets from Live 9 or older left out (re-save them in Live 10 or newer to share them):")
         _first_few(plan.skipped_sets)
     if plan.packs:
         typer.echo(f"\n  Collaborators need these Ableton Packs: {', '.join(plan.packs)}")

@@ -226,19 +226,38 @@ class TestStoppingSafely:
         with pytest.raises(ConsolidateError, match="My Song.als could not be read"):
             p.check()
 
-    def test_a_live_10_main_set_asks_for_a_resave_in_live_11(self, song):
-        (song / "My Song.als").write_bytes(set_with(version="10.0_377"))
-
-        with pytest.raises(ConsolidateError, match="Live 11 or newer"):
-            plan(song).check()
-
-    def test_an_old_live_10_side_set_is_left_out_not_fatal(self, song):
-        (song / "Old Idea.als").write_bytes(set_with(version="10.0_377"))
+    def test_a_live_10_set_using_its_own_samples_pushes_as_it_is(self, song):
+        live10_ref = (
+            "<SampleRef><FileRef><HasRelativePath Value=\"true\" /><RelativePathType Value=\"3\" />"
+            "<RelativePath><RelativePathElement Id=\"0\" Dir=\"Samples\" />"
+            "<RelativePathElement Id=\"1\" Dir=\"Recorded\" /></RelativePath>"
+            "<Name Value=\"Vocal.wav\" /><Type Value=\"2\" /><Data /></FileRef></SampleRef>"
+        )
+        (song / "My Song.als").write_bytes(set_with(live10_ref, version="10.0_377"))
 
         p = plan(song)
 
         assert not p.problems
-        assert p.skipped_sets == ["Old Idea.als"]
+        assert "Samples/Recorded/Vocal.wav" in p.files
+        assert "My Song.als" not in p.rewritten  # a Live 10 set is never re-pointed
+
+    def test_a_live_10_set_using_outside_sounds_asks_to_collect_them(self, song, library):
+        live10_outside = (
+            "<SampleRef><FileRef><HasRelativePath Value=\"true\" /><RelativePathType Value=\"1\" />"
+            "<RelativePath><RelativePathElement Id=\"0\" Dir=\"..\" /><RelativePathElement Id=\"1\" Dir=\"..\" />"
+            f"<RelativePathElement Id=\"2\" Dir=\"{library.name}\" /></RelativePath>"
+            "<Name Value=\"Room Mic.wav\" /><Type Value=\"2\" /><Data /></FileRef></SampleRef>"
+        )
+        (song / "My Song.als").write_bytes(set_with(live10_outside, version="10.0_377"))
+
+        with pytest.raises(ConsolidateError, match="Collect All and Save"):
+            plan(song).check()
+
+    def test_a_live_9_main_set_asks_for_a_resave(self, song):
+        (song / "My Song.als").write_bytes(set_with(version="9.7_123"))
+
+        with pytest.raises(ConsolidateError, match="Live 10 or newer"):
+            plan(song).check()
 
     def test_a_rewrite_that_does_not_read_back_stops_push(self, song, library, monkeypatch):
         from sessionsync.adapters.ableton import consolidate

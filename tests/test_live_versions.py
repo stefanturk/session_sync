@@ -173,13 +173,27 @@ def as_bob(monkeypatch):
     monkeypatch.setenv("SESSIONSYNC_LIVE_MAJOR", "12")
 
 
-def test_live12_gets_a_live12_set_and_sees_no_changes(song, monkeypatch):
+def test_live12_gets_the_songs_set_which_it_opens_itself(song, monkeypatch):
     alice, bob = song
     as_bob(monkeypatch)
     bob_set = bob.project_root / "My Song.als"
-    assert versions.set_major(bob_set) == 12
+    assert versions.set_major(bob_set) == 11  # Live 12 opens it; nothing is made up
     assert marker(bob_set) == "Alice v1"
     assert not bob.review().has_changes
+
+
+def test_live10_gets_a_live10_set(tmp_path, song, remote, monkeypatch):
+    shaped10 = root_of(live11())
+    versions._filerefs_to_live10(shaped10)  # Live 10 keeps sample paths as folder elements
+    s10 = versions.Schema(major=10)
+    s10.learn(shaped10)
+    s10.header = {"MinorVersion": "10.0_377", "Creator": "Ableton Live 10.1"}
+    schemas = {11: versions.schema_for(11), 10: s10.finish()}
+    monkeypatch.setattr(versions, "schema_for", lambda major: schemas.get(major))
+    monkeypatch.setenv("SESSIONSYNC_LIVE_MAJOR", "10")
+    carol = Repository.clone(remote, tmp_path / "carol" / "My Song", author=BOB)
+    assert versions.set_major(carol.project_root / "My Song.als") == 10
+    assert not carol.review().has_changes
 
 
 def test_a_live12_push_is_kept_as_live11_and_opens_for_live11(song, monkeypatch):
