@@ -128,6 +128,8 @@ class MainWindow(QMainWindow):
         self.start.remove_requested.connect(self._remove_from_start)
         self.start.remove_hub_requested.connect(self.remove_hub)
         self.start.unhide_requested.connect(self.unhide_songs)
+        self.start.invite_requested.connect(self.invite)
+        self.start.connect_found.connect(self._connect_found)
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self.start)
@@ -547,6 +549,8 @@ class MainWindow(QMainWindow):
         if self._hub_check is not None and self._hub_check.isRunning():
             return
         if not self.settings.hubs():
+            self._auto_connect()
+        if not self.settings.hubs():
             return
         try:
             author = load_identity()
@@ -698,6 +702,34 @@ class MainWindow(QMainWindow):
         for song in self.settings.hidden_songs(hub):
             self.settings.unhide_song(hub, song)
         self.start.refresh()
+
+    def _auto_connect(self) -> None:
+        """Nothing connected yet and exactly one shared folder in Drive: that's the one."""
+        from sessionsync.core import drivelink
+
+        try:
+            found = drivelink.find_shared_folders()
+        except Exception as exc:  # noqa: BLE001 - best effort; the checklist says what's missing
+            osinfo.log(f"looking for shared folders failed: {exc!r}")
+            return
+        if len(found) == 1:
+            osinfo.log(f"connected the shared folder found in Drive: {found[0]}")
+            self._connect_found(found[0])
+        else:
+            self.start.refresh()  # the checklist ticks along as Drive catches up
+
+    def _connect_found(self, folder) -> None:
+        self.settings.add_hub(Path(folder))
+        self.start.refresh()
+        self.notifier.show(
+            f"Connected {Path(folder).name}. Its songs are listed on the start screen.",
+            title="SessionSync",
+        )
+
+    def invite(self, hub) -> None:
+        from sessionsync.ui.invite import InviteDialog
+
+        InviteDialog(self, hub, self._me()).exec()
 
     def keep_notifications_on_screen(self) -> None:
         """macOS shows banners for a few seconds; "Alerts" stay until clicked."""

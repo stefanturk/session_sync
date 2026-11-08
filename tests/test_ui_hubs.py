@@ -295,3 +295,44 @@ def test_a_set_aside_bookkeeping_folder_is_never_pushed(tmp_path):
     (aside / "state.db").write_bytes(b"x")
     tracked = [p.relative_to(project).as_posix() for p in AbletonAdapter().enumerate_tracked_files(project)]
     assert not any(".sessionsync" in p for p in tracked)
+
+
+# --- joining ---------------------------------------------------------------------
+
+
+def test_with_nothing_connected_the_one_shared_folder_in_drive_is_connected(qt_app, tmp_path, monkeypatch):
+    from sessionsync.core import drivelink
+
+    monkeypatch.setenv("SESSIONSYNC_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SESSIONSYNC_NAME", "Alice")
+    monkeypatch.setenv("SESSIONSYNC_EMAIL", "alice@example.com")
+    folder = tmp_path / "Drive" / "Sam Stefan Sketches"
+    folder.mkdir(parents=True)
+    monkeypatch.setattr(drivelink, "find_shared_folders", lambda *a, **k: [folder])
+    settings = Settings()
+    window = MainWindow(settings)
+    try:
+        window.check_hubs_now()
+        assert [h.path for h in settings.hubs()] == [folder]
+    finally:
+        window.close_everything()
+
+
+def test_the_join_checklist_shows_until_a_folder_is_connected(world, qt_app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QLabel
+
+    window, settings, hub = world
+    settings.remove_hub(hub)
+    window.start.refresh()
+    texts = [w.text() for w in window.start.findChildren(QLabel) if w.isVisibleTo(window.start)]
+    assert any("Google Drive for desktop is installed" in t for t in texts)
+
+
+def test_the_invite_window_offers_the_message(world):
+    from sessionsync.ui.invite import InviteDialog
+
+    window, _, hub = world
+    dialog = InviteDialog(window, hub, {"name": "Alice"})
+    assert "Sam Stefan Sketches" in dialog.text.toPlainText()
+    dialog.copy()
+    assert dialog.copy_button.text().startswith("Copied")

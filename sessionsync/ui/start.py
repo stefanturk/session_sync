@@ -38,6 +38,8 @@ class StartScreen(QWidget):
     remove_requested = Signal(object, str, object)  # Hub or None, song name, your copy or None
     remove_hub_requested = Signal(object)  # Hub
     unhide_requested = Signal(object)  # Hub: show its removed songs again
+    invite_requested = Signal(object)  # Hub
+    connect_found = Signal(object)  # Path of a shared folder found in Drive
 
     def __init__(self, settings: Settings, parent: QWidget | None = None, me: dict | None = None):
         super().__init__(parent)
@@ -61,6 +63,10 @@ class StartScreen(QWidget):
         tagline.setAlignment(Qt.AlignCenter)
         column.addWidget(tagline)
         column.addSpacing(26)
+
+        self.join_box = QVBoxLayout()
+        self.join_box.setSpacing(4)
+        column.addLayout(self.join_box)
 
         self.collab_label = QLabel("COLLABORATORS")
         self.collab_label.setObjectName("silkscreen")
@@ -143,6 +149,7 @@ class StartScreen(QWidget):
 
         self._refresh_collaborators()
         self._refresh_activity()
+        self._refresh_join()
 
         empty = not projects
         self.recent.setVisible(not empty)
@@ -161,7 +168,7 @@ class StartScreen(QWidget):
             header.setData(Qt.UserRole + 1, hub)
             header.setSizeHint(QSize(0, 48))
             self.collab.addItem(header)
-            self.collab.setItemWidget(header, _HubHeader(hub, self.add_requested.emit))
+            self.collab.setItemWidget(header, _HubHeader(hub, self.add_requested.emit, self.invite_requested.emit))
             rows += 1
             songs = hubsync.song_rows(hub, self.settings, self.me)
             for row in songs:
@@ -197,6 +204,50 @@ class StartScreen(QWidget):
         self.collab.setVisible(rows > 0)
         if rows:
             self.collab.setFixedHeight(min(rows, 8) * ROW_HEIGHT + 14)
+
+    def _refresh_join(self) -> None:
+        """No shared folder yet: what joining takes, ticked off as it happens."""
+        from sessionsync.core import drivelink
+
+        while self.join_box.count():
+            child = self.join_box.takeAt(0)
+            if child.widget() is not None:
+                child.widget().deleteLater()
+        if self.settings.hubs():
+            return
+        title = QLabel("JOIN A COLLABORATOR")
+        title.setObjectName("silkscreen")
+        self.join_box.addWidget(title)
+        installed = drivelink.drive_installed()
+        signed = installed and drivelink.signed_in()
+        found = drivelink.find_shared_folders() if signed else []
+        steps = [
+            (installed, "Google Drive for desktop is installed", "Download…", drivelink.DOWNLOAD_URL),
+            (signed, "Signed in to Google Drive", None, None),
+            (bool(found), "The shared folder is in your Drive (in the link they sent: "
+             "Organize › Add shortcut › My Drive)", None, None),
+        ]
+        for done, text, action, url in steps:
+            row = QHBoxLayout()
+            label = QLabel(("✓  " if done else "○  ") + text)
+            label.setWordWrap(True)
+            label.setObjectName("recentName" if done else "recentPath")
+            row.addWidget(label, 1)
+            if not done and action:
+                link = QPushButton(action)
+                link.setFlat(True)
+                link.setCursor(Qt.PointingHandCursor)
+                link.setStyleSheet("font-size: 11px; padding: 0 4px; text-decoration: underline;")
+                link.clicked.connect(lambda _=False, u=url: _open_url(u))
+                row.addWidget(link)
+            holder = QWidget()
+            holder.setLayout(row)
+            self.join_box.addWidget(holder)
+        for folder in found:
+            button = QPushButton(f"Connect “{folder.name}”")
+            button.setCursor(Qt.PointingHandCursor)
+            button.clicked.connect(lambda _=False, f=folder: self.connect_found.emit(f))
+            self.join_box.addWidget(button)
 
     def _refresh_activity(self) -> None:
         """The newest few things collaborators did, by day, each with where to go."""
@@ -271,7 +322,7 @@ class StartScreen(QWidget):
 
 
 class _HubHeader(QWidget):
-    def __init__(self, hub, on_share):
+    def __init__(self, hub, on_share, on_invite=None):
         super().__init__()
         self.setFixedHeight(48)
         row = QHBoxLayout(self)
@@ -286,6 +337,14 @@ class _HubHeader(QWidget):
         share.setStyleSheet("padding: 2px 14px; font-size: 11px;")
         share.setMinimumWidth(150)
         share.clicked.connect(lambda: on_share(hub))
+        if on_invite is not None:
+            invite = QPushButton("Invite…")
+            invite.setToolTip(f"A message that tells someone how to join {hub.name}.")
+            invite.setCursor(Qt.PointingHandCursor)
+            invite.setFixedHeight(34)
+            invite.setStyleSheet("padding: 2px 14px; font-size: 11px;")
+            invite.clicked.connect(lambda: on_invite(hub))
+            row.addWidget(invite)
         row.addWidget(share)
         if getattr(hub, "single_song", False):
             # Connected to one song, not the folder of songs: nothing to add to.
@@ -382,6 +441,13 @@ class _RecentRow(QWidget):
         where.setObjectName("recentPath")
         where.setTextFormat(Qt.PlainText)
         column.addWidget(where)
+
+
+def _open_url(url: str) -> None:
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QDesktopServices
+
+    QDesktopServices.openUrl(QUrl(url))
 
 
 def _pretty_parent(project: Path) -> str:

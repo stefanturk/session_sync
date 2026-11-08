@@ -119,6 +119,16 @@ def one_live_version(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_drive(monkeypatch, tmp_path):
+    """Tests never look at this computer's real Google Drive."""
+    from sessionsync.core import drivelink
+
+    monkeypatch.setattr(drivelink, "drive_roots", lambda: [])
+    monkeypatch.setattr(drivelink, "drivefs_dir", lambda: tmp_path / "no-drivefs")
+    monkeypatch.setattr(drivelink, "drive_installed", lambda: False)
+
+
+@pytest.fixture(autouse=True)
 def no_real_log(monkeypatch, tmp_path):
     """Tests write their log lines to a pretend log, never the app's real one."""
     from sessionsync.core import osinfo
