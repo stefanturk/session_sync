@@ -103,3 +103,14 @@ class FileInUseError(SessionSyncError):
             f"Live (or another program) is using {path.name}, so Session Sync cannot read it "
             "right now. Close the song in Live, then try again. Nothing was changed."
         )
+
+
+class ConversionFailedError(SessionSyncError):
+    """A set could not be turned into the song's Live version."""
+
+    def __init__(self, path: str, major: int, why: str):
+        self.path, self.major = path, major
+        super().__init__(
+            f"{path} could not be turned into a Live {major} set, which the song is kept in "
+            f"({why}). Nothing was pushed."
+        )

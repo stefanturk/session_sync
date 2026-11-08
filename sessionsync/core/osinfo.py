@@ -45,6 +45,27 @@ def open_with_default_app(path: Path) -> None:
         subprocess.run(["xdg-open", str(path)], check=False)
 
 
+def open_in_live(path: Path) -> None:
+    """Open a Live Set in the Live version this computer uses (Settings), so a
+    computer with Live 10 and 11 both installed opens the right one."""
+    from sessionsync.adapters.ableton import versions
+
+    major = versions.my_live_major()
+    installs = sorted(versions.installed_lives().get(major, []), key=lambda p: p.name) if major else []
+    try:
+        if installs and IS_MAC:
+            subprocess.run(["open", "-a", str(installs[-1]), str(path)], check=False)
+            return
+        if installs and IS_WINDOWS:
+            exes = sorted((installs[-1] / "Program").glob("Ableton Live*.exe"))
+            if exes:
+                subprocess.Popen([str(exes[-1]), str(path)], **quiet_flags())  # noqa: S603
+                return
+    except OSError as exc:
+        log(f"could not start Live {major} directly: {exc!r}")
+    open_with_default_app(path)
+
+
 def app_data_dir() -> Path:
     """Where the app keeps its log: ~/Library/Logs, or %LOCALAPPDATA%\\SessionSync."""
     if IS_WINDOWS:

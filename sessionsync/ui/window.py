@@ -83,6 +83,9 @@ class MainWindow(QMainWindow):
     def __init__(self, settings: Settings | None = None):
         super().__init__()
         self.settings = settings or Settings()
+        from sessionsync.adapters.ableton import versions as _versions
+
+        _versions.set_preferred_major(self.settings.live_major())
 
         self.setWindowTitle(APP_NAME)
         self.resize(880, 660)

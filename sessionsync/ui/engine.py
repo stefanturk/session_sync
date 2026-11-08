@@ -19,7 +19,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal, Slot
 
 from sessionsync.auth.identity import load_identity
-from sessionsync.core import livewatch
+from sessionsync.core import livewatch, osinfo
 from sessionsync.core.repository import Repository, Status
 
 
@@ -43,6 +43,10 @@ class Snapshot:
     set_summary: str = ""          # "Changed Main, Drums" — inside the main Live Set
     #: said once: changes made while the app was not looking ("…that's fine")
     late_note: str = ""
+    song_live: int | None = None   # the Live version the shared copy is kept in
+    my_live: int | None = None     # the Live version this computer uses
+    live_merges: list = field(default_factory=list)  # [(set Live saved as new, song's set)]
+    live_lost: dict = field(default_factory=dict)    # {set: [what the song's Live cannot hold]}
 
 
 class Engine(QObject):
@@ -235,6 +239,31 @@ class Engine(QObject):
             "was closed — that's fine, nobody pushed in the meantime."
         )
 
+    def _live_versions(self, repo: Repository, status: Status) -> dict:
+        """The song's Live version vs this computer's, and what a Push would convert."""
+        from sessionsync.adapters.ableton import versions
+
+        out = {"song_live": None, "my_live": versions.my_live_major(), "live_merges": [], "live_lost": {}}
+        try:
+            out["song_live"] = repo.song_live_major()
+            if status.diff.has_changes and any(p.lower().endswith(".als") for p in status.diff.added + status.diff.modified):
+                out["live_merges"] = repo.saved_as_new()
+                key = []
+                for p in sorted(status.diff.added + status.diff.modified):
+                    if p.lower().endswith(".als"):
+                        st = (repo.project_root / p).stat()
+                        key.append((p, st.st_mtime_ns, st.st_size))
+                key = tuple(key)
+                cached = getattr(self, "_lost_cache", None)
+                if cached and cached[0] == key:
+                    out["live_lost"] = cached[1]
+                else:
+                    out["live_lost"] = repo.lost_in_push()
+                    self._lost_cache = (key, out["live_lost"])
+        except Exception as exc:  # never let this stop the window drawing
+            osinfo.log(f"live version check failed: {exc!r}")
+        return out
+
     def _emit_snapshot(self) -> None:
         repo = self._repository()
         status = repo.status()
@@ -257,6 +286,7 @@ class Engine(QObject):
                 unused_bytes=plan.unused_bytes if plan else 0,
                 packs=list(plan.packs) if plan else [],
                 problems=list(plan.problems) if plan else [],
+                **self._live_versions(repo, status),
             )
         )
 

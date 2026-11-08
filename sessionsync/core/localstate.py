@@ -136,6 +136,24 @@ class LocalState:
         self._set("seen_changes", value)
 
     @property
+    def twins(self) -> dict:
+        """{shared hash: local hash} for sets this computer holds in another form:
+        converted to this computer's Live version, or with its sample paths
+        written for this computer. The local file *is* that shared version."""
+        return self._get("twins", {}) or {}
+
+    @twins.setter
+    def twins(self, value: dict) -> None:
+        self._set("twins", value)
+
+    def add_twin(self, shared: str, local: str) -> None:
+        twins = self.twins
+        twins[shared] = local
+        if len(twins) > 500:  # only recent versions matter
+            twins = dict(list(twins.items())[-500:])
+        self.twins = twins
+
+    @property
     def last_push(self) -> dict | None:
         return self._get("last_push")
 

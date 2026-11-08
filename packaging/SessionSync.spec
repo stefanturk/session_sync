@@ -52,7 +52,9 @@ a = Analysis(
     ["entry.py"],
     pathex=[".."],
     binaries=[],
-    datas=[],
+    # Live 10 / 11 set formats, for turning sets into the song's Live version.
+    datas=[(os.path.join(SPECPATH, "..", "sessionsync", "adapters", "ableton", "schemas"),
+            "sessionsync/adapters/ableton/schemas")],
     hiddenimports=["sessionsync.adapters.ableton.adapter"],
     hookspath=[],
     runtime_hooks=[],

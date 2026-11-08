@@ -45,6 +45,23 @@ def push_preview(snapshot) -> tuple[list[str], list[str]]:
         )
     if snapshot.packs:
         lines.append(f"Collaborators need these Ableton Packs installed: {', '.join(snapshot.packs)}.")
+    song = getattr(snapshot, "song_live", None)
+    for new, old in getattr(snapshot, "live_merges", []):
+        lines.append(
+            f"“{new}” is Live's “save as new” copy of “{old}”: it becomes the song's set again, "
+            "so everyone works in one set."
+        )
+    mine = getattr(snapshot, "my_live", None)
+    if song and mine and mine != song:
+        lines.append(
+            f"The song is kept as a Live {song} song so everyone can open it: "
+            f"your Live {mine} sets are turned into Live {song} sets as they go up."
+        )
+    for name, lost in getattr(snapshot, "live_lost", {}).items():
+        lines.append(
+            f"⚠  Live {song} cannot hold {', '.join(lost)} in {name}. Others will not get "
+            "them; your copy keeps them."
+        )
     lines.append("The main Live Set is also saved into Past Revisions.")
     return lines, list(snapshot.problems)
 

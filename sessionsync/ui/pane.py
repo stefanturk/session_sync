@@ -707,7 +707,7 @@ class ProjectPane(QWidget):
             QMessageBox.information(self, "You are caught up", describe_catch_up(result))
         elif name == "open_live":
             self._say(f"Opening {result.name} in Live — your own copy.", 10000)
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(result)))
+            osinfo.open_in_live(result)
         elif name == "rescue":
             self._show_rescued(result)
         elif name == "review":
@@ -716,7 +716,7 @@ class ProjectPane(QWidget):
             self._show_history(result)
         elif name == "open_revision":
             self._say(f"Opening {result.name} in Live.", 15000)
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(result)))
+            osinfo.open_in_live(result)
         elif name == "restore":
             self._say(f"Restored a copy to {result}.", 15000)
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.parent)))

@@ -25,5 +25,8 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["sessionsync*"]
 
+[tool.setuptools.package-data]
+"sessionsync.adapters.ableton" = ["schemas/*.json.gz"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

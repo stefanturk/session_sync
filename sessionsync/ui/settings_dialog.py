@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -51,6 +52,19 @@ class SettingsDialog(QDialog):
         column.addWidget(note)
         column.addSpacing(12)
 
+        heading = QLabel("I MAKE MUSIC IN")
+        heading.setObjectName("silkscreen")
+        column.addWidget(heading)
+        self.live = QComboBox()
+        self.live.setToolTip(
+            "Songs you get are turned into sets this Live version opens, and Open in Live "
+            "starts it. What you push goes back into the song's own Live version."
+        )
+        self._fill_live()
+        self.live.currentIndexChanged.connect(self._live_changed)
+        column.addWidget(self.live)
+        column.addSpacing(12)
+
         heading = QLabel("YOUR SONGS")
         heading.setObjectName("silkscreen")
         column.addWidget(heading)
@@ -68,6 +82,24 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         column.addWidget(buttons)
         self._fill()
+
+    def _fill_live(self) -> None:
+        from sessionsync.adapters.ableton import versions
+
+        installed = sorted(versions.installed_lives())
+        chosen = self.settings.live_major()
+        newest = installed[-1] if installed else None
+        self.live.addItem(f"Newest installed (Live {newest})" if newest else "Newest installed", None)
+        for major in sorted(set(installed) | {10, 11, 12}):
+            label = f"Live {major}" + ("" if major in installed else " (not on this computer)")
+            if major == 10:
+                label += " — experimental"
+            self.live.addItem(label, major)
+            if major == chosen:
+                self.live.setCurrentIndex(self.live.count() - 1)
+
+    def _live_changed(self) -> None:
+        self.settings.set_live_major(self.live.currentData())
 
     def _fill(self) -> None:
         root = self.settings.local_root()

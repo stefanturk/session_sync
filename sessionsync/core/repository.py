@@ -26,6 +26,7 @@ from sessionsync.adapters import get_adapter
 from sessionsync.adapters.base import DAWAdapter
 from sessionsync.core import osinfo
 from sessionsync.core.errors import (
+    ConversionFailedError,
     DriveEditsError,
     LocalChangesWouldBeReplacedError,
     NewerFormatError,
@@ -288,6 +289,8 @@ class Repository:
             size = path.stat().st_size
             if base is not None and base.size == size:
                 known = base.source_sha256 or base.sha256
+            elif base is not None and base.sha256 in self.state.twins:
+                known = self.state.twins[base.sha256]
         # Unknown and unreadable (Live recording into it): shown as changed, checked later.
         return known or f"in-use:{path.stat().st_size}:{path.stat().st_mtime_ns}"
 
@@ -302,11 +305,18 @@ class Repository:
     def _as_shared(self, files: dict[str, FileEntry]) -> dict[str, FileEntry]:
         """A Set this computer pushed (and Consolidate rewrote) counts as unchanged."""
         base = self.base_files()
+        twins = self.state.twins
         for path, entry in list(files.items()):
             pushed = base.get(path)
-            if pushed is not None and pushed.source_sha256 == entry.sha256:
+            if pushed is None:
+                continue
+            if pushed.source_sha256 == entry.sha256 or twins.get(pushed.sha256) == entry.sha256:
                 files[path] = pushed
         return files
+
+    def _matches(self, entry: FileEntry, sha256: str) -> bool:
+        """This computer's file is that version of it (as is, or in this computer's form)."""
+        return entry.matches(sha256) or self.state.twins.get(entry.sha256) == sha256
 
     def _known_paths(self) -> dict[str, str]:
         """{path: hash} for every file any version has held, newest wins."""
@@ -558,9 +568,223 @@ class Repository:
             else:
                 files = self.scan()
                 sources = {e.sha256: self.project_root / e.path for e in files.values()}
-            return self._publish(files, sources, plan, note, remote_version)
+            files, sources, merged = self._in_song_version(files, sources, scratch)
+            result = self._publish(files, sources, plan, note, remote_version)
+            self._after_push_versions(files, merged)
+            return result
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
+
+    # --- Live versions ----------------------------------------------------
+
+    def song_live_major(self) -> int | None:
+        """The Live version the shared copy is kept in (the oldest the song's sets use)."""
+        meta = self.storage.read_repo_metadata() or {}
+        if meta.get("live_major"):
+            return int(meta["live_major"])
+        cached = self.state._get("song_live_major")
+        if cached:
+            return int(cached)
+        from sessionsync.adapters.ableton import versions
+
+        majors = []
+        sets = {
+            rel: e for rel, e in self.base_files().items()
+            if rel.lower().endswith(".als") and "/" not in rel
+        }
+        if sets:
+            scratch = Path(tempfile.mkdtemp(prefix="sessionsync-version-"))
+            try:
+                for n, entry in enumerate(sets.values()):
+                    target = scratch / f"{n}.als"
+                    try:
+                        self.storage.download_object(entry.sha256, target)
+                    except Exception:
+                        continue
+                    major = versions.set_major(target)
+                    if major:
+                        majors.append(major)
+            finally:
+                shutil.rmtree(scratch, ignore_errors=True)
+        else:
+            majors = [m for m in (versions.set_major(p) for p in self.project_root.glob("*.als")) if m]
+        if not majors:
+            return None
+        song = min(majors)
+        self.state._set("song_live_major", song)
+        return song
+
+    def saved_as_new(self, files: dict[str, FileEntry] | None = None) -> list[tuple[str, str]]:
+        """Sets a newer Live saved beside the song's set ("My Song 12.als" next to
+        "My Song.als", when Live asked to save as a new set): [(new set, song's set)].
+        Pushing makes the new one the song's set again, in the song's version."""
+        from sessionsync.adapters.ableton import versions
+
+        song = self.song_live_major()
+        if song is None:
+            return []
+        files = files if files is not None else self._look(self.scan)
+        base = self.base_files()
+        pairs = []
+        for rel in sorted(files):
+            if not rel.lower().endswith(".als") or "/" in rel:
+                continue
+            shared = base.get(rel)
+            if shared is not None and files[rel].sha256 == shared.sha256:
+                major = self._shared_major(shared)  # as shared, whatever form it has here
+            else:
+                major = versions.set_major(self.project_root / rel)
+            if not major or major <= song:
+                continue
+            stem = Path(rel).stem
+            for other in sorted(files):
+                if other == rel or "/" in other or not other.lower().endswith(".als"):
+                    continue
+                other_stem = Path(other).stem
+                if not stem.startswith(other_stem + " ") or other not in base:
+                    continue
+                if files[other].sha256 != base[other].sha256:
+                    continue  # the song's set was changed here too: nothing is merged over it
+                pairs.append((rel, other))
+                break
+        return pairs
+
+    def _shared_major(self, entry: FileEntry) -> int | None:
+        """The Live version of a set as it is kept in the shared copy."""
+        from sessionsync.adapters.ableton import versions
+
+        known = self.state._get("set_majors", {}) or {}
+        if entry.sha256 in known:
+            return known[entry.sha256]
+        scratch = Path(tempfile.mkdtemp(prefix="sessionsync-version-"))
+        try:
+            target = scratch / "set.als"
+            self.storage.download_object(entry.sha256, target)
+            major = versions.set_major(target)
+        except Exception:
+            major = None
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+        known[entry.sha256] = major
+        self.state._set("set_majors", known)
+        return major
+
+    def lost_in_push(self) -> dict[str, list[str]]:
+        """{set: [what the song's Live version cannot hold]} for sets this push converts."""
+        from sessionsync.adapters.ableton import versions
+
+        song = self.song_live_major()
+        out: dict[str, list[str]] = {}
+        if song is None:
+            return out
+        base = self.base_files()
+        for rel, entry in self._look(self.scan).items():
+            if not rel.lower().endswith(".als") or "/" in rel or base.get(rel) == entry:
+                continue
+            path = self.project_root / rel
+            major = versions.set_major(path)
+            if major and major > song:
+                try:
+                    lost = versions.convert(path.read_bytes(), song).lost
+                except versions.ConversionError:
+                    continue
+                if lost:
+                    out[rel] = lost
+        return out
+
+    def _in_song_version(self, files, sources, scratch: Path):
+        """Every set this push uploads, turned into the song's Live version.
+        A set Live saved as new beside the song's set takes that set's place."""
+        from sessionsync.adapters.ableton import versions
+
+        song = self.song_live_major()
+        if song is None:
+            return files, sources, []
+        merged = self.saved_as_new(files)
+        for new, old in merged:
+            entry = files.pop(new)
+            files[old] = FileEntry(path=old, sha256=entry.sha256, size=entry.size,
+                                   source_sha256=entry.source_sha256)
+        for n, (rel, entry) in enumerate(sorted(files.items())):
+            if not rel.lower().endswith(".als") or entry.sha256 not in sources:
+                continue
+            data = Path(sources[entry.sha256]).read_bytes()
+            major = versions.live_major(data)
+            if not major or major == song:
+                continue
+            try:
+                converted = versions.convert(data, song)
+            except versions.ConversionError as exc:
+                raise ConversionFailedError(rel, song, str(exc)) from None
+            temp = scratch / f"v{n}.als"
+            temp.write_bytes(converted.data)
+            sha = hashlib.sha256(converted.data).hexdigest()
+            files[rel] = FileEntry(path=rel, sha256=sha, size=len(converted.data),
+                                   source_sha256=entry.source_sha256 or entry.sha256)
+            sources[sha] = temp
+        return self._as_shared(files), sources, merged
+
+    def _after_push_versions(self, files, merged) -> None:
+        """Keep the song's version in repo.json, and tidy a merged "saved as new" set."""
+        from sessionsync.adapters.ableton import versions
+
+        song = self.song_live_major()
+        meta = self.storage.read_repo_metadata() or {}
+        if song and not meta.get("live_major"):
+            meta["live_major"] = song
+            try:
+                self.storage.write_repo_metadata(meta)
+            except Exception:
+                pass
+        if not merged:
+            return
+        trash = self._new_trash_folder()
+        mine = versions.my_live_major()
+        for new, old in merged:
+            new_path, old_path = self.project_root / new, self.project_root / old
+            entry = files[old]
+            if old_path.exists():
+                self._to_trash(old_path, trash)
+            if not new_path.exists():
+                continue
+            if mine is None or mine >= (versions.set_major(new_path) or 0):
+                new_path.rename(old_path)  # the newer Live keeps working in the song's own set
+                self.state.add_twin(entry.sha256, self.hash_cache.hash_file(old_path))
+            else:
+                # This computer's Live cannot open the newer set: it gets the song's version.
+                self._to_trash(new_path, trash)
+                self.storage.download_object(entry.sha256, old_path)
+                self.hash_cache.remember(old_path, entry.sha256)
+                self._for_this_computer(old_path, entry)
+        self._known_cache = None
+
+    def _for_this_computer(self, local: Path, entry: FileEntry) -> None:
+        """A set just pulled: in this computer's Live version, with its samples
+        found on this computer. The shared version stays the one recorded."""
+        from sessionsync.adapters.ableton import versions
+
+        if not versions.LOCALIZE or not local.name.lower().endswith(".als"):
+            return
+        data = local.read_bytes()
+        out = data
+        mine, theirs = versions.my_live_major(), versions.live_major(data)
+        if mine and theirs and mine != theirs:
+            try:
+                out = versions.convert(data, mine).data
+            except versions.ConversionError as exc:
+                osinfo.log(f"could not make {local.name} a Live {mine} set: {exc}")
+        try:
+            out = versions.localize(out, local, self.project_root)
+        except versions.ConversionError:
+            pass
+        if out == data:
+            return
+        temp = local.with_name(local.name + ".converting")
+        temp.write_bytes(out)
+        temp.replace(local)
+        sha = hashlib.sha256(out).hexdigest()
+        self.hash_cache.remember(local, sha)
+        self.state.add_twin(entry.sha256, sha)
 
     def _consolidated_files(self, plan, scratch: Path) -> tuple[dict[str, FileEntry], dict[str, Path]]:
         files = self._file_map(plan.files)
@@ -678,7 +902,7 @@ class Repository:
         for path, entry in sorted(target.files.items()):
             local = self.project_root / path
             if local.exists():
-                if entry.matches(self._hash(local)):
+                if self._matches(entry, self._hash(local)):
                     continue  # already have exactly this content
                 if path not in diff.added and path not in diff.modified:
                     continue  # locally edited, and this version does not change it
@@ -698,7 +922,18 @@ class Repository:
                     raise DriveEditsError(edits) from None
                 raise
             self.hash_cache.remember(local, entry.sha256)  # copied and verified: never read again
+            self._for_this_computer(local, entry)
             downloaded += entry.size
+
+        # A set the new version dropped (merged back into the song's set) goes to
+        # the trash if it is exactly what was shared, so it is not pushed again.
+        base_before = self.base_files()
+        for path in diff.deleted:
+            local = self.project_root / path
+            entry = base_before.get(path)
+            if path.lower().endswith(".als") and entry is not None and local.exists() \
+                    and self._matches(entry, self._hash(local)):
+                self._to_trash(local, trash)
 
         # Files the new version no longer uses stay on this computer: an older
         # revision may need them, and they were never anyone else's to remove.
@@ -756,7 +991,7 @@ class Repository:
             local = self.project_root / path
             if not local.exists():
                 missing.append(entry)
-            elif not entry.matches(self._hash(local)):
+            elif not self._matches(entry, self._hash(local)):
                 if not path.startswith("Ableton Project Info/"):
                     conflicts.append(path)
 
@@ -869,7 +1104,7 @@ class Repository:
             unchanged = (
                 entry is not None
                 and target.exists()
-                and entry.matches(self._hash(target))
+                and self._matches(entry, self._hash(target))
             )
             if unchanged and not behind:
                 trash = trash or self._new_trash_folder()
@@ -904,7 +1139,7 @@ class Repository:
         at_risk = []
         for path, incoming in target.files.items():
             local_entry = local.get(path)
-            if local_entry is None or incoming.matches(local_entry.sha256):
+            if local_entry is None or self._matches(incoming, local_entry.sha256):
                 continue
             base_entry = base.get(path)
             if base_entry is not None and local_entry.sha256 != base_entry.sha256:

@@ -109,6 +109,16 @@ def als_with_tracks(tracks: dict[str, str], samples=(VOCAL,)) -> bytes:
 
 
 @pytest.fixture(autouse=True)
+def one_live_version(monkeypatch):
+    """Everyone in a test uses Live 11 and keeps sets exactly as shared, unless
+    the test is about Live versions (tests/test_live_versions.py)."""
+    from sessionsync.adapters.ableton import versions
+
+    monkeypatch.setenv("SESSIONSYNC_LIVE_MAJOR", "11")
+    monkeypatch.setattr(versions, "LOCALIZE", False)
+
+
+@pytest.fixture(autouse=True)
 def no_real_desktop(monkeypatch, tmp_path):
     """New songs default to the Desktop: in tests that is a pretend one."""
     user = tmp_path / "user-home"

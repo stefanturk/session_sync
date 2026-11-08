@@ -104,6 +104,17 @@ class Settings:
         found = self._read().get("song_repos", {}).get(repository_id)
         return Path(found) if found else None
 
+    def live_major(self) -> int | None:
+        """The Live version chosen in Settings (None: the newest one installed)."""
+        value = self._read().get("live_major")
+        return int(value) if value else None
+
+    def set_live_major(self, major: int | None) -> None:
+        from sessionsync.adapters.ableton import versions
+
+        self._write({**self._read(), "live_major": major})
+        versions.set_preferred_major(major)
+
     def set_local_root(self, path: Path) -> None:
         self._write({**self._read(), "local_root": str(path)})
 
