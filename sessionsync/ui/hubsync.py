@@ -72,7 +72,10 @@ class SongRow:
 
 def song_rows(hub: Hub, settings: Settings, me: dict | None = None) -> list[SongRow]:
     rows = []
+    hidden = set(settings.hidden_songs(hub))
     for song in hub.songs():
+        if song.name in hidden:
+            continue
         local = settings.song_path(hub, song.name)
         if local.is_dir() and LocalState.exists(local):
             base = LocalState.open(local).base_version
@@ -150,7 +153,10 @@ def check_hubs(settings: Settings, author: dict, open_roots: set[Path] | None = 
     for hub in settings.hubs():
         events, seen = compare_scans(hub, settings.seen(hub), me=author)
         settings.set_seen(hub, seen)
+        hidden = set(settings.hidden_songs(hub))
         for event in events:
+            if event.song in hidden:
+                continue
             if event.kind == "new_song":
                 messages.append(
                     News(f"{hub.name} added a new song: {event.song}", hub, event.song, None, kind="new_song")

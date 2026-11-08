@@ -317,8 +317,8 @@ class AbletonAdapter:
 
     def _is_tracked(self, file: Path, root: Path) -> bool:
         rel_parts = file.relative_to(root).parts
-        if any(part in EXCLUDED_DIRS for part in rel_parts[:-1]):
-            return False
+        if any(part in EXCLUDED_DIRS or part.startswith(".sessionsync") for part in rel_parts[:-1]):
+            return False  # incl. ".sessionsync-removed …", set aside by Remove from Session Sync
         name = file.name
         if name in EXCLUDED_NAMES or name.startswith("._"):
             return False

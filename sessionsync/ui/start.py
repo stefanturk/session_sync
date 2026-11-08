@@ -35,6 +35,9 @@ class StartScreen(QWidget):
     add_requested = Signal(object)  # Hub
     activity_action = Signal(object, str)  # Activity, "open" | "pull" | "history"
     alerts_requested = Signal()  # keep notifications on screen (macOS settings)
+    remove_requested = Signal(object, str, object)  # Hub or None, song name, your copy or None
+    remove_hub_requested = Signal(object)  # Hub
+    unhide_requested = Signal(object)  # Hub: show its removed songs again
 
     def __init__(self, settings: Settings, parent: QWidget | None = None, me: dict | None = None):
         super().__init__(parent)
@@ -68,6 +71,8 @@ class StartScreen(QWidget):
         self.collab.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.collab.itemActivated.connect(self._song_activated)
         self.collab.itemClicked.connect(self._song_activated)
+        self.collab.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.collab.customContextMenuRequested.connect(self._collab_menu)
         column.addWidget(self.collab)
 
         self.connect_button = QPushButton("CONNECT A SHARED FOLDER…")
@@ -108,6 +113,8 @@ class StartScreen(QWidget):
         self.recent.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.recent.itemActivated.connect(self._chosen)
         self.recent.itemClicked.connect(self._chosen)
+        self.recent.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.recent.customContextMenuRequested.connect(self._recent_menu)
         column.addWidget(self.recent)
 
         self.open_button = QPushButton("OPEN PROJECT…")
@@ -150,7 +157,8 @@ class StartScreen(QWidget):
         rows = 0
         for hub in self.settings.hubs():
             header = QListWidgetItem()
-            header.setFlags(Qt.NoItemFlags)
+            header.setFlags(Qt.ItemIsEnabled)
+            header.setData(Qt.UserRole + 1, hub)
             header.setSizeHint(QSize(0, 48))
             self.collab.addItem(header)
             self.collab.setItemWidget(header, _HubHeader(hub, self.add_requested.emit))
@@ -164,6 +172,18 @@ class StartScreen(QWidget):
                 self.collab.setItemWidget(
                     item, _SongRow(row, lambda h=hub, n=row.song.name: self.live_requested.emit(h, n))
                 )
+                rows += 1
+            hidden = self.settings.hidden_songs(hub)
+            if hidden:
+                note = QListWidgetItem()
+                note.setFlags(Qt.ItemIsEnabled)
+                note.setData(Qt.UserRole + 2, hub)
+                note.setSizeHint(QSize(0, 26))
+                note.setToolTip("Click to list them again: " + ", ".join(hidden))
+                self.collab.addItem(note)
+                label = QLabel(f"  Show removed songs ({len(hidden)})")
+                label.setObjectName("recentPath")
+                self.collab.setItemWidget(note, label)
                 rows += 1
             if not songs:
                 note = QListWidgetItem()
@@ -201,7 +221,46 @@ class StartScreen(QWidget):
             shown and sys.platform == "darwin" and not self.settings.flag("alerts_offered")
         )
 
+    def _collab_menu(self, pos) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        item = self.collab.itemAt(pos)
+        if item is None:
+            return
+        menu = QMenu(self)
+        song = item.data(Qt.UserRole)
+        hub = item.data(Qt.UserRole + 1)
+        if song:
+            hub, name = song
+            local = self.settings.song_path(hub, name)
+            menu.addAction(
+                "Remove from Session Sync…",
+                lambda: self.remove_requested.emit(hub, name, local if local.is_dir() else None),
+            )
+        elif hub is not None:
+            menu.addAction("Remove This Shared Folder…", lambda: self.remove_hub_requested.emit(hub))
+            if self.settings.hidden_songs(hub):
+                menu.addAction("Show Removed Songs", lambda: self.unhide_requested.emit(hub))
+        else:
+            return
+        menu.exec(self.collab.viewport().mapToGlobal(pos))
+
+    def _recent_menu(self, pos) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        item = self.recent.itemAt(pos)
+        if item is None:
+            return
+        path = Path(item.data(Qt.UserRole))
+        menu = QMenu(self)
+        menu.addAction("Remove from Session Sync…", lambda: self.remove_requested.emit(None, path.name, path))
+        menu.exec(self.recent.viewport().mapToGlobal(pos))
+
     def _song_activated(self, item: QListWidgetItem) -> None:
+        hidden_of = item.data(Qt.UserRole + 2)
+        if hidden_of is not None:
+            self.unhide_requested.emit(hidden_of)
+            return
         data = item.data(Qt.UserRole)
         if data:
             hub, song = data

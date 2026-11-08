@@ -1358,6 +1358,24 @@ class Repository:
         session = self.state.session
         return session["key"] if session else ""
 
+    def stop_tracking(self) -> Path:
+        """This computer stops syncing the song; nothing is deleted.
+
+        The folder stays an ordinary Live project, and the shared copy in Drive
+        is not touched. This copy's presence note goes, so nobody sees it
+        "working". Session Sync's own bookkeeping is moved aside, not deleted
+        (rename it back to `.sessionsync` to undo). Returns where it went.
+        """
+        try:
+            self._end_session_marker()
+        except Exception as exc:  # noqa: BLE001 - Drive may be away; the note expires anyway
+            osinfo.log(f"could not remove the presence note: {exc!r}")
+        self.state.close()
+        stamp = datetime.now().strftime("%Y-%m-%d %H%M%S")
+        aside = self.project_root / f".sessionsync-removed {stamp}"
+        shutil.move(str(self.state.dir), str(aside))
+        return aside
+
     def _end_session_marker(self) -> None:
         session = self.state.session
         if session:

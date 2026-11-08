@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from sessionsync.auth.identity import load_identity
 from sessionsync.core import locations, osinfo
+from sessionsync.core.repository import Repository
 from sessionsync.core.localstate import LocalState
 from sessionsync.ui import hubsync, theme
 from sessionsync.ui.notify import Notifier
@@ -124,6 +125,9 @@ class MainWindow(QMainWindow):
         self.start.add_requested.connect(self.add_project)
         self.start.activity_action.connect(self.activity_action)
         self.start.alerts_requested.connect(self.keep_notifications_on_screen)
+        self.start.remove_requested.connect(self._remove_from_start)
+        self.start.remove_hub_requested.connect(self.remove_hub)
+        self.start.unhide_requested.connect(self.unhide_songs)
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self.start)
@@ -162,6 +166,11 @@ class MainWindow(QMainWindow):
         close_tab.setShortcut(QKeySequence.Close)  # ⌘W closes a tab, not the app
         close_tab.triggered.connect(lambda: self.close_tab(self.tabs.currentIndex()))
         menu.addAction(close_tab)
+
+        remove = QAction("&Remove from Session Sync…", self)
+        remove.setToolTip("Stop syncing this song on this computer; every file stays")
+        remove.triggered.connect(lambda: self._with_current(lambda pane: self.remove_song(pane.project_root)))
+        menu.addAction(remove)
 
         menu.addSeparator()
         history = QAction("Project &History…", self)
@@ -606,6 +615,89 @@ class MainWindow(QMainWindow):
             pane.request_pull.emit(False)
         elif action == "history":
             pane.show_history()
+
+    # --- removing songs and shared folders (files always stay) ---------------
+
+    def _hub_song_of(self, project_root: Path):
+        """(hub, song name) this folder is your copy of, or (None, None)."""
+        project_root = Path(project_root).resolve()
+        for key, path in self.settings.songs():
+            if Path(path).resolve() == project_root:
+                hub_path, _, song = key.rpartition("|")
+                hub = next((h for h in self.settings.hubs() if str(h.path) == hub_path), None)
+                if hub is not None:
+                    return hub, song
+        return None, None
+
+    def _remove_from_start(self, hub, song: str, path) -> None:
+        if path is not None and LocalState.exists(path):
+            self.remove_song(path)
+        elif hub is not None:
+            self._hide_song(hub, song)
+
+    def _hide_song(self, hub, song: str) -> None:
+        answer = QMessageBox.question(
+            self,
+            f"Hide {song}?",
+            f"{song} is no longer listed here and you get no news about it. The shared "
+            f"copy in Drive is not touched. “Show removed songs” under {hub.name} brings it back.",
+            QMessageBox.Ok | QMessageBox.Cancel,
+        )
+        if answer == QMessageBox.Ok:
+            self.settings.hide_song(hub, song)
+            self.start.refresh()
+
+    def remove_song(self, project_root: Path) -> None:
+        """Stop syncing a song on this computer. Its folder and Drive's copy stay as they are."""
+        project_root = Path(project_root).resolve()
+        name = project_root.name
+        answer = QMessageBox.question(
+            self,
+            f"Remove {name} from Session Sync?",
+            f"Session Sync stops syncing {name} on this computer.\n\n"
+            f"Nothing is deleted: your folder {project_root} stays a normal Live project, "
+            "and the shared copy in Google Drive is not touched. Changes you have not "
+            "pushed stay only on this computer.\n\n"
+            "You can get the song again from the start screen at any time.",
+            QMessageBox.Ok | QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Ok:
+            return
+        pane = self._pane_for(project_root)
+        if pane is not None:
+            pane.shutdown()
+            self.tabs.removeTab(self.tabs.indexOf(pane))
+            pane.deleteLater()
+        hub, song = self._hub_song_of(project_root)
+        try:
+            repo = Repository.open(project_root, author=self._me() or {})
+            aside = repo.stop_tracking()
+            osinfo.log(f"stopped tracking {project_root}; bookkeeping moved to {aside}")
+        except Exception as exc:  # noqa: BLE001 - say it; the lists are still tidied
+            QMessageBox.warning(self, "Not removed", f"Could not stop syncing {name}: {exc}")
+            return
+        self.settings.forget_song_path(project_root)
+        if hub is not None:
+            self.settings.hide_song(hub, song)
+        self.start.refresh()
+        self._show_start_if_empty()
+
+    def remove_hub(self, hub) -> None:
+        answer = QMessageBox.question(
+            self,
+            f"Remove {hub.name}?",
+            f"Session Sync stops watching the shared folder {hub.name}. Nothing in it is "
+            "touched, and your copies of its songs keep working. You can connect it again later.",
+            QMessageBox.Ok | QMessageBox.Cancel,
+        )
+        if answer == QMessageBox.Ok:
+            self.settings.remove_hub(hub)
+            self.start.refresh()
+
+    def unhide_songs(self, hub) -> None:
+        for song in self.settings.hidden_songs(hub):
+            self.settings.unhide_song(hub, song)
+        self.start.refresh()
 
     def keep_notifications_on_screen(self) -> None:
         """macOS shows banners for a few seconds; "Alerts" stay until clicked."""

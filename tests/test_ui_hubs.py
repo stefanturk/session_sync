@@ -239,3 +239,59 @@ def test_activity_keeps_one_line_per_push_and_groups_by_day():
     items = activity.add(items, a)
     assert len(activity.grouped(items + [activity.Activity("x", at="2026-11-07T11:00:00+00:00")])) >= 1
     assert activity.Activity("New", song="S", kind="new_song").links() == [("Get my copy", "open")]
+
+
+# --- removing a song (files stay) -------------------------------------------------
+
+
+def test_removing_a_song_keeps_every_file_and_stops_listing_it(world, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from sessionsync.core.localstate import LocalState
+
+    window, settings, hub = world
+    window.open_song(hub, "Song B")
+    local = settings.song_path(hub, "Song B")
+    files_before = sorted(p.relative_to(local).as_posix() for p in local.rglob("*") if ".sessionsync" not in str(p))
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Ok))
+
+    window.remove_song(local)
+
+    assert window.tabs.count() == 0
+    assert not LocalState.exists(local)
+    assert list(local.glob(".sessionsync-removed *"))  # set aside, not deleted
+    files_after = sorted(
+        p.relative_to(local).as_posix() for p in local.rglob("*") if ".sessionsync" not in str(p)
+    )
+    assert files_after == files_before
+    assert hub.song("Song B") is not None  # the shared copy is untouched
+    assert hubsync.song_rows(hub, settings) == []
+    assert settings.hidden_songs(hub) == ["Song B"]
+
+    window.unhide_songs(hub)
+    rows = hubsync.song_rows(hub, settings)
+    assert [r.song.name for r in rows] == ["Song B"] and rows[0].state == "new"
+
+
+def test_a_removed_song_sends_no_news(world, tmp_path):
+    from tests.conftest import record
+
+    window, settings, hub = world
+    me = {"name": "Alice", "email": "alice@example.com"}
+    hubsync.check_hubs(settings, me)
+    settings.hide_song(hub, "Song B")
+    sam = hub.join_song("Song B", tmp_path / "sam3", BOB)
+    record(sam.project_root, "Samples/Recorded/n.wav", b"n")
+    sam.push()
+    assert hubsync.check_hubs(settings, me) == []
+
+
+def test_a_set_aside_bookkeeping_folder_is_never_pushed(tmp_path):
+    from sessionsync.adapters.ableton.adapter import AbletonAdapter
+
+    project = write_project(tmp_path / "p" / "My Song")
+    aside = project / ".sessionsync-removed 2026-11-08 120000"
+    aside.mkdir()
+    (aside / "state.db").write_bytes(b"x")
+    tracked = [p.relative_to(project).as_posix() for p in AbletonAdapter().enumerate_tracked_files(project)]
+    assert not any(".sessionsync" in p for p in tracked)

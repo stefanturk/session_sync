@@ -163,6 +163,40 @@ class Settings:
             data.setdefault("song_repos", {})[repository_id] = str(path)
         self._write(data)
 
+    def hidden_songs(self, hub: Hub) -> list[str]:
+        """Songs removed from Session Sync on this computer: not listed, no news."""
+        return list(self._read().get("hidden_songs", {}).get(str(hub.path), []))
+
+    def hide_song(self, hub: Hub, song: str) -> None:
+        data = self._read()
+        hidden = data.setdefault("hidden_songs", {}).setdefault(str(hub.path), [])
+        if song not in hidden:
+            hidden.append(song)
+        path = data.get("song_paths", {}).pop(f"{hub.path}|{song}", None)
+        if path:
+            repos = data.get("song_repos", {})
+            for key in [k for k, v in repos.items() if v == path]:
+                repos.pop(key)
+        self._write(data)
+
+    def unhide_song(self, hub: Hub, song: str) -> None:
+        data = self._read()
+        hidden = data.get("hidden_songs", {}).get(str(hub.path), [])
+        if song in hidden:
+            hidden.remove(song)
+            self._write(data)
+
+    def forget_song_path(self, path: Path) -> None:
+        """A song folder that is no longer tracked here: out of every list."""
+        path = str(Path(path))
+        data = self._read()
+        for table in ("song_paths", "song_repos"):
+            entries = data.get(table, {})
+            for key in [k for k, v in entries.items() if v == path]:
+                entries.pop(key)
+        data["recent_projects"] = [p for p in data.get("recent_projects", []) if p != path]
+        self._write(data)
+
     def seen(self, hub: Hub) -> dict[str, int] | None:
         """{song: newest version already reported}, or None for a hub never scanned."""
         value = self._read().get("seen", {}).get(str(hub.path))
