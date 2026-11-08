@@ -37,6 +37,7 @@ class TestLocalFolderLayout:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr("shutil.copyfile", explode)
+            mp.setattr("shutil.copyfileobj", explode)  # the Windows path
             with pytest.raises(OSError):
                 storage.upload_object("cc" * 32, src)
 

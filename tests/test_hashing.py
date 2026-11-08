@@ -16,11 +16,13 @@ def test_hash_file_reads_in_chunks_without_loading_whole_file(tmp_path):
     f = tmp_path / "big.wav"
     f.write_bytes(b"x" * 300_000)
 
-    reads = []
-    real_open = type(f).open
+    from sessionsync.core import winfiles
 
-    def spy_open(self, *args, **kwargs):
-        fh = real_open(self, *args, **kwargs)
+    reads = []
+    real_open = winfiles.open_for_reading
+
+    def spy_open(path):
+        fh = real_open(path)
         real_read = fh.read
 
         def counting_read(n=-1):
@@ -32,7 +34,7 @@ def test_hash_file_reads_in_chunks_without_loading_whole_file(tmp_path):
         return fh
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(type(f), "open", spy_open)
+        mp.setattr(winfiles, "open_for_reading", spy_open)
         digest = hash_file(f)
 
     assert digest == hashlib.sha256(f.read_bytes()).hexdigest()
