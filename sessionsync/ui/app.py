@@ -68,6 +68,22 @@ class SessionSyncApp(QApplication):
         self.pending.clear()
 
 
+def _windows_icon(app) -> None:
+    """On Windows, run from source with pythonw: Session Sync's own icon and
+    taskbar group instead of Python's. (A Mac .app has its icon already.)"""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Steezy.session_sync")
+    except Exception:
+        pass
+    ico = Path(__file__).resolve().parents[2] / "icon.ico"
+    if ico.exists():
+        from PySide6.QtGui import QIcon
+        app.setWindowIcon(QIcon(str(ico)))
+
+
 def link_argument(argv: list[str]) -> str | None:
     return next((a for a in argv if a.startswith("sessionsync:")), None)
 
@@ -75,6 +91,7 @@ def link_argument(argv: list[str]) -> str | None:
 def main(argv: list[str] | None = None) -> int:
     argv = list(argv if argv is not None else sys.argv[1:])
     app = SessionSyncApp([sys.argv[0] if sys.argv else "sessionsync"])
+    _windows_icon(app)
 
     # Already running? Hand over what this copy was started for, and stop.
     # (Windows starts a new copy for every "▶ Open in Live" click.)
