@@ -102,6 +102,7 @@ class VersionSummary:
     summary: str = ""
     restorable: bool = True  # False only for versions an older Session Sync pruned
     revision_path: str | None = None  # its main Live Set in Past Revisions/
+    sizes: dict = field(default_factory=dict)  # size of each added or changed file
 
 
 class Repository:
@@ -121,6 +122,7 @@ class Repository:
         self.hash_cache = HashCache(state.db_path)
         self._known_cache: tuple[int, dict[str, str]] | None = None
         self.last_plan = None
+        self._restart_after = 0  # sharing again after the history was lost: carry on numbering
         self._looking = False  # a status check (may skip files Live holds open), not a push
         self.in_use: list[str] = []  # files the last look could not read
 
@@ -220,6 +222,89 @@ class Repository:
             metadata = {}
         adapter = get_adapter(metadata.get("project_format", "ableton"))
         return cls(project_root, storage, adapter, author, state)
+
+    @classmethod
+    def reshare(cls, project_root: Path, *, author: dict) -> "Repository":
+        """The shared copy lost its hidden history: give it back from this copy.
+
+        Every computer keeps the manifest of the version it is on, for exactly
+        this. Putting it back makes the files still in the song folder count
+        again, so only what is missing is uploaded, from this copy. Changes
+        made here stay for an ordinary Push. Without that manifest (a copy last
+        synced by an older Session Sync), this copy is shared as the next version.
+        Collaborators carry on as usual: same song, same numbering.
+        """
+        from sessionsync.core.localstate import LocalState
+        from sessionsync.storage import storage_from_location
+
+        project_root = Path(project_root)
+        state = LocalState.open(project_root)
+        storage = storage_from_location(state.remote)
+        if storage.read_repo_metadata() is not None:
+            raise ValueError("The shared copy still has its history; nothing to repair.")
+        adapter = get_adapter("ableton")
+        metadata = {
+            "repository_format_version": REPOSITORY_FORMAT_VERSION,
+            "repository_id": state.repository_id or str(uuid.uuid4()),
+            "project_name": project_root.name,
+            "project_format": adapter.format_name,
+            "project_adapter_version": adapter.adapter_version,
+            "created_by": author,
+            "created_at": _now(),
+            "reshared_from": {"author": author, "version": state.base_version, "at": _now()},
+        }
+        song_live = state._get("song_live_major")
+        if song_live:
+            metadata["live_major"] = song_live
+        storage.write_repo_metadata(metadata)
+        repo = cls(project_root, storage, adapter, author, state)
+        put_back = repo._put_back_base()
+        adopt = getattr(storage, "adopt_sets", None)
+        if adopt is not None:
+            adopt()  # what is in the song folder now was shared, not saved there by hand
+        if not put_back:
+            repo._restart_after = state.base_version
+            state.base_version = 0
+            try:
+                repo.push(note="Shared again from this copy")
+            except NothingToPushError:
+                pass
+        return repo
+
+    def _remember_base(self) -> None:
+        """Keep the manifest of the version this copy is on (see `reshare`)."""
+        try:
+            if self.base_version:
+                self.state._set("base_manifest", self.storage.read_manifest(self.base_version).decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001 - only a repair aid
+            osinfo.log(f"could not keep the base manifest: {exc!r}")
+
+    def _put_back_base(self) -> bool:
+        """Republish the kept manifest of this copy's version. False if it cannot be."""
+        kept = self.state._get("base_manifest")
+        if not kept:
+            return False
+        manifest = Manifest.from_json(kept)
+        if manifest.version != self.base_version or not manifest.files:
+            return False
+        shows = getattr(self.storage, "shows", lambda entry: False)
+        present = self.storage.existing_objects({e.sha256 for e in manifest.files.values()})
+        for entry in manifest.files.values():
+            if entry.sha256 in present or shows(entry):
+                continue
+            local = self.project_root / entry.path
+            if not local.is_file() or self._hash(local) != entry.sha256:
+                # neither Drive nor this copy has it byte for byte as it was
+                # (changed here, or kept in this computer's Live version)
+                return False
+            self.storage.upload_object(entry.sha256, local)
+            present.add(entry.sha256)
+        if manifest.revision and not shows(
+            FileEntry(manifest.revision["path"], manifest.revision["sha256"], manifest.revision["size"])
+        ) and manifest.revision["sha256"] not in present:
+            manifest.revision = None
+        self.storage.publish_manifest(manifest.version, manifest.to_json().encode("utf-8"))
+        return True
 
     # --- where things stand --------------------------------------------
 
@@ -341,7 +426,16 @@ class Repository:
         """The project as it was at the version this copy started from."""
         if self.base_version == 0:
             return {}
-        return self.read_manifest(self.base_version).files
+        try:
+            return self.read_manifest(self.base_version).files
+        except FileNotFoundError:
+            # the shared history was lost and shared again from another copy
+            kept = self.state._get("base_manifest")
+            if kept:
+                manifest = Manifest.from_json(kept)
+                if manifest.version == self.base_version:
+                    return manifest.files
+            raise
 
     def review(self) -> ManifestDiff:
         """What has changed here since the version this copy is on.
@@ -407,6 +501,7 @@ class Repository:
                     summary=describe_version(previous_manifest, manifest),
                     restorable=version not in pruned,
                     revision_path=(manifest.revision or {}).get("path"),
+                    sizes=diff.sizes,
                 )
             )
             previous, previous_bytes = manifest.files, manifest.total_bytes
@@ -574,6 +669,103 @@ class Repository:
             return result
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
+
+    # --- wrong pushes: a second look before, and undo after -----------------
+
+    def push_warnings(self, diff: ManifestDiff | None = None, merges=()) -> list[str]:
+        """Reasons this push looks like a mistake, in plain words. Empty for an
+        ordinary push; otherwise the Push dialog asks once more before it goes.
+
+        `merges`: [(new set, song's set)] that Push folds back together, so a
+        "save as new" copy is not mistaken for a second set.
+        """
+        if self.base_version == 0:
+            return []
+        base_manifest = self.read_manifest(self.base_version)
+        base = base_manifest.files
+        if not base:
+            return []
+        diff = diff if diff is not None else self.review()
+        warnings = []
+        main = (base_manifest.revision or {}).get("set")
+        if main and main in diff.deleted:
+            warnings.append(f"It removes the song's Live Set, “{main}”.")
+        elif main and main in diff.modified:
+            before, after = base[main].size, diff.sizes.get(main, 0)
+            if before > 50_000 and after < before / 2:
+                warnings.append(
+                    f"The song's Live Set, “{main}”, is less than half its size "
+                    f"({after // 1024} KB, was {before // 1024} KB)."
+                )
+        gone = len(diff.deleted)
+        gone_bytes = sum(base[p].size for p in diff.deleted)
+        all_bytes = sum(e.size for e in base.values()) or 1
+        if gone >= 3 and (gone > len(base) * 0.2 or gone_bytes > all_bytes * 0.2):
+            warnings.append(
+                f"It removes {gone} of the song's {len(base)} files "
+                f"({gone_bytes * 100 // all_bytes}% of it)."
+            )
+        merged = {new for new, _ in merges}
+        had_top_set = any(p.lower().endswith(".als") and "/" not in p for p in base)
+        extra = [
+            p for p in diff.added
+            if p.lower().endswith(".als") and "/" not in p and p not in merged
+        ]
+        if had_top_set and extra:
+            warnings.append(
+                "It adds another Live Set beside the song's own: "
+                + ", ".join(f"“{p}”" for p in extra)
+                + ". Fine if you meant to; if Live saved a copy, keep working in one set."
+            )
+        return warnings
+
+    def make_latest(self, version: int, note: str | None = None) -> PushResult:
+        """Undo: share a new version holding exactly the files of `version`.
+
+        Nothing is lost. The versions after it stay in History, so this can be
+        undone the same way. Nobody's own copy changes until they pull.
+        """
+        self.check_format()
+        versions = self.storage.list_versions()
+        if version not in versions:
+            raise ValueError(f"There is no version {version}.")
+        if version in getattr(self.storage, "pruned_versions", lambda: set())():
+            raise ValueError(f"Version {version} is older than the versions that are kept.")
+        remote = self.remote_version()
+        old = self.read_manifest(version)
+        latest = self.read_manifest(remote)
+        diff = diff_file_maps(latest.files, old.files)
+        if not diff.has_changes:
+            raise NothingToPushError(f"The latest version already holds what v{version} held.")
+        wanted = {e.sha256 for e in old.files.values()}
+        if wanted - set(self.storage.existing_objects(wanted)):
+            raise ValueError(f"Some of the files of v{version} are no longer in the shared folder.")
+
+        new_version = remote + 1
+        note = note or f"Back to v{version}"
+        revision = None
+        if old.revision and old.revision.get("set") in old.files:
+            revision = dict(old.revision)
+            revision["path"] = past_revision_name(
+                new_version, self.author, note, Path(old.revision["set"]).stem
+            )
+        manifest = Manifest(
+            version=new_version,
+            repository_id=self.state.repository_id,
+            parent_version=remote,
+            project_format=self.adapter.format_name,
+            author=self.author,
+            note=note,
+            files=dict(old.files),
+            summary=f"Back to v{version} · " + summarise(diff, latest.tracks, old.tracks),
+            tracks=old.tracks,
+            revision=revision,
+        )
+        try:
+            self.storage.publish_manifest(new_version, manifest.to_json().encode("utf-8"))
+        except VersionAlreadyExistsError:
+            raise StalePushError(self.base_version, self.remote_version()) from None
+        return PushResult(new_version, diff, 0, 0)
 
     # --- Live versions ----------------------------------------------------
 
@@ -815,7 +1007,7 @@ class Repository:
             uploaded_objects += 1
             uploaded_bytes += entry.size
 
-        new_version = remote_version + 1
+        new_version = (remote_version or self._restart_after) + 1
         revision = None
         main = plan.main_set if plan is not None else None
         if main and main in files:
@@ -853,6 +1045,7 @@ class Repository:
             raise StalePushError(self.base_version, self.remote_version()) from None
 
         self.state.base_version = new_version
+        self._remember_base()
         self.state.last_push = {
             "version": new_version,
             "at": _now(),
@@ -944,6 +1137,7 @@ class Repository:
         downloaded += self._fetch_past_revisions()
 
         self.state.base_version = target_version
+        self._remember_base()
         return PullResult(from_version, target_version, diff, downloaded)
 
     def _fetch_past_revisions(self) -> int:

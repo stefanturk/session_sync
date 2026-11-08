@@ -47,6 +47,7 @@ class Snapshot:
     my_live: int | None = None     # the Live version this computer uses
     live_merges: list = field(default_factory=list)  # [(set Live saved as new, song's set)]
     live_lost: dict = field(default_factory=dict)    # {set: [what the song's Live cannot hold]}
+    push_warnings: list = field(default_factory=list)  # why this push looks like a mistake
 
 
 class Engine(QObject):
@@ -174,6 +175,22 @@ class Engine(QObject):
             lambda: self._repository().open_revision(version),
         )
 
+    @Slot()
+    def reshare(self) -> None:
+        def work():
+            self._repo = Repository.reshare(self.project_root, author=load_identity())
+            return self._repo
+
+        self._run("reshare", "Sharing the song again from your copy…", work)
+
+    @Slot(int)
+    def make_latest(self, version: int) -> None:
+        self._run(
+            "make_latest",
+            f"Making v{version} the latest again…",
+            lambda: self._repository().make_latest(version),
+        )
+
     @Slot(int, str)
     def restore(self, version: int, destination: str) -> None:
         self._run(
@@ -269,6 +286,13 @@ class Engine(QObject):
         status = repo.status()
         plan = status.plan  # Consolidate: what Push would send, and what it leaves here
         live_open, live_on_drive = self._live_flags(repo)
+        live = self._live_versions(repo, status)
+        warnings = []
+        if status.diff.has_changes:
+            try:
+                warnings = repo.push_warnings(status.diff, merges=live["live_merges"])
+            except Exception as exc:  # never let this stop the window drawing
+                osinfo.log(f"push check failed: {exc!r}")
         self.snapshot_ready.emit(
             Snapshot(
                 project_root=repo.project_root,
@@ -286,7 +310,8 @@ class Engine(QObject):
                 unused_bytes=plan.unused_bytes if plan else 0,
                 packs=list(plan.packs) if plan else [],
                 problems=list(plan.problems) if plan else [],
-                **self._live_versions(repo, status),
+                push_warnings=warnings,
+                **live,
             )
         )
 

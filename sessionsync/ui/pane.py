@@ -33,7 +33,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QFileDialog,
-    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -49,6 +48,7 @@ from sessionsync.core.errors import (
     LocalChangesWouldBeReplacedError,
     NothingToPushError,
     ProjectBehindError,
+    SharedHistoryMissingError,
     StalePushError,
 )
 from sessionsync.core.session import HEARTBEAT_SECONDS
@@ -91,6 +91,8 @@ class ProjectPane(QWidget):
     request_history = Signal()
     request_restore = Signal(int, str)
     request_open_revision = Signal(int)
+    request_make_latest = Signal(int)
+    request_reshare = Signal()
     request_catch_up = Signal()
 
     #: level, state_label — so the shell can colour the tab and title the window
@@ -344,6 +346,8 @@ class ProjectPane(QWidget):
         self.request_history.connect(self.engine.history)
         self.request_restore.connect(self.engine.restore)
         self.request_open_revision.connect(self.engine.open_revision)
+        self.request_make_latest.connect(self.engine.make_latest)
+        self.request_reshare.connect(self.engine.reshare)
         self.request_catch_up.connect(self.engine.catch_up)
 
         self.engine.snapshot_ready.connect(self._show)
@@ -717,6 +721,12 @@ class ProjectPane(QWidget):
         elif name == "open_revision":
             self._say(f"Opening {result.name} in Live.", 15000)
             osinfo.open_in_live(result)
+        elif name == "reshare":
+            self._reshare_offered = False
+            self._say(f"{self.project_name} is shared again from your copy (v{result.base_version}).", 15000)
+        elif name == "make_latest":
+            self._say(f"Shared v{result.version}, the song as it was before. Updating your copy…", 15000)
+            self.request_pull.emit(False)
         elif name == "restore":
             self._say(f"Restored a copy to {result}.", 15000)
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.parent)))
@@ -739,6 +749,9 @@ class ProjectPane(QWidget):
         )
 
     def _operation_failed(self, name: str, error: Exception) -> None:
+        if isinstance(error, SharedHistoryMissingError):
+            self._offer_reshare(error)
+            return
         if name == "refresh":
             # A background look runs every few seconds: a dialog each time would
             # never stop. Say it in the window, once, and keep looking.
@@ -766,6 +779,28 @@ class ProjectPane(QWidget):
             box.setInformativeText(str(error))
         box.exec()
         self.request_refresh.emit()
+
+    def _offer_reshare(self, error: SharedHistoryMissingError) -> None:
+        """The song's hidden history in Drive is gone: offer to give it back, once."""
+        self._say(str(error))
+        if getattr(self, "_reshare_offered", False):
+            return
+        self._reshare_offered = True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setText(f"The shared copy of {self.project_name} has lost its history.")
+        box.setInformativeText(
+            "The hidden .sessionsync folder inside it in Google Drive is gone. If someone "
+            "moved or deleted it by mistake, putting it back from Drive's Trash is best.\n\n"
+            "Otherwise Session Sync can share it again from your copy: same song, same "
+            "version numbers, and only files missing from Drive are uploaded. Your "
+            "collaborators carry on as usual."
+        )
+        again = box.addButton("Share Again From My Copy", QMessageBox.AcceptRole)
+        box.addButton("Not Now", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is again:
+            self.request_reshare.emit()
 
     def _confirm_replacing_local_work(self, error: LocalChangesWouldBeReplacedError) -> None:
         box = QMessageBox(self)
@@ -809,21 +844,17 @@ class ProjectPane(QWidget):
         show_text(self, "Changes since you started", "\n".join(lines))
 
     def _show_history(self, entries) -> None:
-        lines = []
-        for entry in entries:
-            who = (entry.author or {}).get("name", "Someone")
-            lines.append(
-                f"v{entry.version}   {local_time(entry.created_at)}   {who} — "
-                f"{entry.summary or '(no summary)'}"
-            )
-            if entry.note:
-                lines.append(f"        \u201c{entry.note}\u201d")
-        chosen = show_history(self, "\n".join(lines) or "No versions yet.", entries)
-        if chosen is None:
+        from sessionsync.ui.history import HistoryDialog
+
+        dialog = HistoryDialog(self, entries, self.project_name)
+        dialog.exec()
+        if dialog.chosen is None:
             return
-        action, version = chosen
+        action, version = dialog.chosen
         if action == "open":
             self.request_open_revision.emit(version)
+        elif action == "latest":
+            self.request_make_latest.emit(version)
         else:
             self.restore_version(version)
 
@@ -885,43 +916,3 @@ def show_text(parent, title: str, text: str) -> None:
     buttons.rejected.connect(dialog.reject)
     layout.addWidget(buttons)
     dialog.exec()
-
-
-def show_history(parent, text: str, entries) -> tuple[str, int] | None:
-    """The history text plus ways to go back to an old revision.
-
-    Returns ("open", version) to open it in Live, ("restore", version) to build
-    it as a separate copy, or None.
-    """
-    dialog = QDialog(parent)
-    dialog.setWindowTitle("Project History")
-    dialog.resize(680, 480)
-    layout = QVBoxLayout(dialog)
-    view = QTextEdit()
-    view.setReadOnly(True)
-    view.setPlainText(text)
-    view.setStyleSheet("font-family: 'SF Mono', Menlo, monospace; font-size: 12px;")
-    layout.addWidget(view)
-
-    buttons = QDialogButtonBox(QDialogButtonBox.Close)
-    open_rev = buttons.addButton("Open in Live\u2026", QDialogButtonBox.ActionRole)
-    restore = buttons.addButton("Restore a Copy\u2026", QDialogButtonBox.ActionRole)
-    buttons.rejected.connect(dialog.reject)
-    layout.addWidget(buttons)
-
-    usable = [e for e in entries if getattr(e, "restorable", True)]
-    picked: list[tuple[str, int]] = []
-
-    def ask(action: str, title: str) -> None:
-        labels = [f"v{e.version} \u2014 {e.summary or 'no summary'}" for e in usable]
-        label, ok = QInputDialog.getItem(dialog, title, "Which version?", labels, 0, False)
-        if ok:
-            picked.append((action, usable[labels.index(label)].version))
-            dialog.accept()
-
-    open_rev.clicked.connect(lambda: ask("open", "Open an Old Revision in Live"))
-    restore.clicked.connect(lambda: ask("restore", "Restore a Copy"))
-    open_rev.setEnabled(bool(usable))
-    restore.setEnabled(bool(usable))
-    dialog.exec()
-    return picked[0] if picked else None

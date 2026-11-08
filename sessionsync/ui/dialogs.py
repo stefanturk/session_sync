@@ -108,6 +108,20 @@ def ask_push(parent, snapshot, *, live_closed: bool = False) -> str | None:
         label.setStyleSheet("color: #E05050;")
         layout.addWidget(label)
 
+    warnings = list(getattr(snapshot, "push_warnings", []) or [])
+    sure = None
+    if warnings and not problems:
+        title = QLabel("This push looks different from usual:")
+        title.setStyleSheet("color: #E05050; font-weight: bold;")
+        layout.addWidget(title)
+        for warning in warnings:
+            label = QLabel("•  " + warning)
+            label.setWordWrap(True)
+            label.setStyleSheet("color: #E05050;")
+            layout.addWidget(label)
+        sure = QCheckBox("Yes, push it like this (if it was wrong, History › Make This the Latest Again undoes it)")
+        layout.addWidget(sure)
+
     saved = QCheckBox("I saved the set in Live")
     saved.setChecked(live_closed)  # closing Live is when it asks to save
     layout.addWidget(saved)
@@ -122,10 +136,12 @@ def ask_push(parent, snapshot, *, live_closed: bool = False) -> str | None:
     layout.addWidget(buttons)
 
     def update() -> None:
-        go.setEnabled(saved.isChecked() and not problems)
+        go.setEnabled(saved.isChecked() and not problems and (sure is None or sure.isChecked()))
         go.setToolTip("Fix the problem above first." if problems else "")
 
     saved.toggled.connect(update)
+    if sure is not None:
+        sure.toggled.connect(update)
     buttons.accepted.connect(dialog.accept)
     buttons.rejected.connect(dialog.reject)
     update()

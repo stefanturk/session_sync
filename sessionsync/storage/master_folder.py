@@ -59,6 +59,7 @@ LOCK_FILE = "commit.lock"
 RESCUED_DIR = "rescued"
 TRASH_DIR = "trash"
 MIGRATING_FILE = "migrating"
+ADOPTED_FILE = "adopted_sets.json"  # sets already here when the history was shared again
 
 #: Where the project files live inside the song folder (format 2).
 DATA_DIR = "Song data — managed by Session Sync"
@@ -237,6 +238,11 @@ class MasterFolderStorage:
             elif next(self._older_sources(sha), None) is not None:
                 present.add(sha)
         return present
+
+    def shows(self, entry: FileEntry) -> bool:
+        """The file is in the song folder at its own path, at its size (the
+        hidden history being gone, say): it need not be uploaded again."""
+        return _has_size(self._visible(entry.path), entry.size)
 
     def _older_sources(self, sha256: str):
         """Visible files that some earlier revision held with this content.
@@ -672,9 +678,36 @@ class MasterFolderStorage:
                 found.append(path.relative_to(self.root).as_posix())
         return found
 
+    def adopt_sets(self) -> None:
+        """After the history was shared again: the Live Sets already in the song
+        folder (Past Revisions of the lost versions, mostly) are nobody's edit."""
+        version = self._committed_version()
+        expected = self._expected_sets(version) if version else {}
+        adopted = {}
+        data = self.data_root
+        for path in sorted(data.rglob("*")) if data.is_dir() else ():
+            parts = path.relative_to(self.root).parts
+            name = path.name.lower()
+            if not path.is_file() or META_DIR in parts:
+                continue
+            if not (name.endswith(".als") or name.endswith(SHARED_SET_SUFFIX)):
+                continue
+            rel = undisguise(path.relative_to(data).as_posix())
+            sha = self._quick_hash(path)
+            if sha not in expected.get(rel, set()):
+                adopted.setdefault(rel, []).append(sha)
+        _write_atomic(self.meta / ADOPTED_FILE, json.dumps(adopted, indent=1).encode("utf-8"))
+
     def _expected_sets(self, version: int) -> dict[str, set[str]]:
         """{set path: acceptable hashes}. Past Revisions are fixed; current sets are current."""
         expected: dict[str, set[str]] = {}
+        try:
+            adopted = json.loads((self.meta / ADOPTED_FILE).read_bytes())
+        except (OSError, ValueError):
+            adopted = {}
+        for rel, hashes in adopted.items():
+            if rel.lower().endswith(".als"):
+                expected.setdefault(rel, set()).update(hashes)
         for number in self.list_versions():
             try:
                 manifest = self._manifest(number)
