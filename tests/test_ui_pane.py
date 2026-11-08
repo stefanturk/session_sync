@@ -231,3 +231,33 @@ def test_a_failed_background_check_never_pops_up_a_dialog(pane, monkeypatch):
         pane._operation_failed("refresh", PermissionError(13, "Permission denied", "Vocal.wav"))
     assert shown == []
     assert "Permission denied" in pane.status_line.text()
+
+
+def test_a_push_live_still_holds_waits_and_goes_when_the_song_closes(pane, alice, identity, monkeypatch):
+    """Windows: Live holds a new recording. No dialog; the push goes by itself later."""
+    from dataclasses import replace
+    from pathlib import Path
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from sessionsync.core.errors import FileInUseError
+
+    shown, pushed = [], []
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: shown.append(self.text()))
+    record(alice.project_root, "Samples/Recorded/Take 3.wav", b"take 3")
+    snap = snapshot_of(alice.project_root)
+    pane._show(replace(snap, live_open=True))
+    pane.request_push.connect(pushed.append)
+
+    pane._send_push("bass idea")
+    pushed.clear()
+    pane._operation_failed("push", FileInUseError(Path("Take 3.wav")))
+    assert shown == []
+    assert "pushes by itself" in pane.status_line.text()
+
+    pane._show(replace(snap, live_open=True))
+    assert pushed == []  # still open in Live
+    pane._show(replace(snap, live_open=False))
+    assert pushed == ["bass idea"]
+    pane._show(replace(snap, live_open=False))
+    assert pushed == ["bass idea"]  # once only

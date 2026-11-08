@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
 
 from sessionsync.core.errors import (
     DriveEditsError,
+    FileInUseError,
     LocalChangesWouldBeReplacedError,
     NothingToPushError,
     ProjectBehindError,
@@ -110,6 +111,8 @@ class ProjectPane(QWidget):
         self._open_on_first_snapshot = False
         self._ask_after_live_closed = False
         self._busy = False
+        self._push_note: str | None = None        # the note of the push in progress
+        self._push_when_closed: str | None = None  # Live held a file: push once it lets go
 
         self._build()
         self._start_engine(self.project_root)
@@ -484,6 +487,12 @@ class ProjectPane(QWidget):
         if self._open_on_first_snapshot:
             self._open_on_first_snapshot = False
             QTimer.singleShot(0, self._open_clicked)
+        if self._push_when_closed is not None and not snapshot.live_open and not self._busy:
+            note, self._push_when_closed = self._push_when_closed, None
+            self._ask_after_live_closed = False  # already said yes: no second question
+            if snapshot.status.has_local_changes and snapshot.status.state != "push_blocked":
+                self._say("You closed the song in Live — pushing now, as promised.", 10000)
+                self._send_push(note)
         if self._ask_after_live_closed and not snapshot.live_open:
             self._ask_after_live_closed = False
             QTimer.singleShot(0, self._after_live_closed)
@@ -667,7 +676,7 @@ class ProjectPane(QWidget):
             return
         note = ask_push(self, snapshot, live_closed=True)
         if note is not None:
-            self.request_push.emit(note)
+            self._send_push(note)
 
     def _confirm_catch_up_after_close(self) -> bool:
         answer = QMessageBox.question(
@@ -688,7 +697,11 @@ class ProjectPane(QWidget):
             return
         note = ask_push(self, snapshot)
         if note is not None:
-            self.request_push.emit(note)
+            self._send_push(note)
+
+    def _send_push(self, note: str) -> None:
+        self._push_note = note
+        self.request_push.emit(note)
 
     # --- results ---------------------------------------------------------
 
@@ -764,6 +777,18 @@ class ProjectPane(QWidget):
             return
         if isinstance(error, NothingToPushError):
             self._say(str(error), 8000)
+            return
+        if name == "push" and isinstance(error, FileInUseError) and self.snapshot and self.snapshot.live_open:
+            # Windows: Live still holds a new recording. Not an error worth a dialog:
+            # the push goes by itself the moment Live lets go of the song.
+            self._push_when_closed = self._push_note or ""
+            held = getattr(error.path, "name", str(error.path))
+            self._say(
+                f"Live is still holding {held}, so it cannot be sent yet. Session Sync "
+                "pushes by itself as soon as you close the song in Live.",
+                0,
+            )
+            osinfo.log(f"push waits for Live to let go of {error.path}")
             return
 
         box = QMessageBox(self)

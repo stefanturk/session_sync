@@ -46,6 +46,7 @@ from pathlib import Path
 from sessionsync.core import launcher
 from sessionsync.core.hashing import hash_file
 from sessionsync.core.manifest import FileEntry, Manifest
+from sessionsync.core.winfiles import open_for_reading
 from sessionsync.storage.base import NotReadyError, StorageError, VersionAlreadyExistsError
 
 META_DIR = ".sessionsync"
@@ -863,7 +864,7 @@ def _copy_verified(source: Path, dest: Path, sha256: str) -> None:
     tmp = dest.with_name(dest.name + ".incoming")
     digest = hashlib.sha256()
     try:
-        with source.open("rb") as src, tmp.open("wb") as out:
+        with open_for_reading(source) as src, tmp.open("wb") as out:
             while chunk := src.read(_CHUNK):
                 digest.update(chunk)
                 out.write(chunk)

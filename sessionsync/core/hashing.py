@@ -17,8 +17,10 @@ CHUNK_SIZE = 1024 * 1024
 
 def hash_file(path: Path) -> str:
     """SHA-256 of a file's contents, read in chunks."""
+    from sessionsync.core.winfiles import open_for_reading
+
     digest = hashlib.sha256()
-    with path.open("rb") as fh:
+    with open_for_reading(Path(path)) as fh:
         while chunk := fh.read(CHUNK_SIZE):
             digest.update(chunk)
     return digest.hexdigest()

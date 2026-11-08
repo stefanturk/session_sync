@@ -63,7 +63,13 @@ class LocalFolderStorage:
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_name(dest.name + ".incoming")
         try:
-            shutil.copyfile(source, tmp)
+            if os.name == "nt":  # read past Live holding it open (see core/winfiles.py)
+                from sessionsync.core.winfiles import open_for_reading
+
+                with open_for_reading(Path(source)) as src, open(tmp, "wb") as out:
+                    shutil.copyfileobj(src, out, 1024 * 1024)
+            else:
+                shutil.copyfile(source, tmp)
             os.replace(tmp, dest)  # only ever appears complete
         finally:
             tmp.unlink(missing_ok=True)
