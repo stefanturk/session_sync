@@ -52,6 +52,11 @@ class Settings:
         return out
 
     def add_hub(self, path: Path, name: str | None = None) -> Hub:
+        from sessionsync.core import locations
+        from sessionsync.core.errors import CloudRootError
+
+        if locations.is_cloud_root(Path(path)):
+            raise CloudRootError(Path(path).expanduser())
         hub = Hub(Path(path).expanduser(), name)
         kept = [h for h in self.hubs() if h.path != hub.path]
         self._write({**self._read(), "hubs": [hub_to_json(h) for h in kept + [hub]]})

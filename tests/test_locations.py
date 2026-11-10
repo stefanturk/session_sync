@@ -45,3 +45,39 @@ def test_room_is_checked_with_space_to_record(tmp_path):
     enough, free = locations.room_for(tmp_path / "not yet", 1)
     assert free > 0
     assert locations.room_for(tmp_path, free)[0] is False  # needs the spare too
+
+
+def test_the_top_of_a_cloud_drive_is_recognised(tmp_path):
+    for top in (
+        tmp_path / "My Drive (me@example.com)",
+        tmp_path / "Library" / "CloudStorage" / "GoogleDrive-me",
+        tmp_path / "Library" / "CloudStorage" / "GoogleDrive-me" / "My Drive",
+        tmp_path / "Dropbox",
+        tmp_path / "OneDrive - Work",
+        tmp_path / "Library" / "Mobile Documents" / "com~apple~CloudDocs",
+    ):
+        assert locations.is_cloud_root(top), top
+    for inside in (
+        tmp_path / "My Drive (me@example.com)" / "Song Collaboration",
+        tmp_path / "Library" / "CloudStorage" / "GoogleDrive-me" / "My Drive" / "Songs",
+        tmp_path / "Dropbox" / "Music",
+        tmp_path / "Desktop",
+    ):
+        assert not locations.is_cloud_root(inside), inside
+
+
+def test_nothing_is_ever_written_to_the_top_of_a_drive(tmp_path):
+    import pytest
+    from sessionsync.core.errors import CloudRootError
+    from sessionsync.storage.master_folder import MasterFolderStorage
+    from sessionsync.ui.settings import Settings
+
+    top = tmp_path / "My Drive (me@example.com)"
+    top.mkdir()
+    with pytest.raises(CloudRootError):
+        MasterFolderStorage(top)._ensure_layout()
+    assert list(top.iterdir()) == []
+    with pytest.raises(CloudRootError):
+        Settings(tmp_path / "ui.json").add_hub(top)
+    (top / "Song Collaboration").mkdir()
+    MasterFolderStorage(top / "Song Collaboration" / "Song")._ensure_layout()  # fine

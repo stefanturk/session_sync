@@ -14,7 +14,7 @@ import typer
 from sessionsync.adapters.ableton.adapter import AbletonAdapter
 from sessionsync.auth.identity import load_identity, save_identity
 from sessionsync.core import osinfo
-from sessionsync.core.errors import SessionSyncError
+from sessionsync.core.errors import CloudRootError, SessionSyncError
 from sessionsync.core.repository import Repository
 from sessionsync.core.session import describe_sessions
 from sessionsync.storage import storage_from_location
@@ -506,7 +506,10 @@ def hub_add(
     """Connect a collaborator's shared folder once; its songs appear automatically."""
     if not folder.expanduser().is_dir():
         _fail(f"{folder} is not a folder.")
-    hub = _settings().add_hub(folder, name)
+    try:
+        hub = _settings().add_hub(folder, name)
+    except CloudRootError as exc:
+        _fail(str(exc))
     typer.echo(f"Connected '{hub.name}' ({len(hub.songs())} song(s) found).")
 
 

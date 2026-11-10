@@ -90,6 +90,32 @@ def is_synced(path: Path) -> bool:
     return any(part == "Box" or part.startswith(_SYNCED_NAMES) for part in parts)
 
 
+def is_cloud_root(path: Path) -> bool:
+    """Is `path` the very top of a synced drive (My Drive, Dropbox, OneDrive, iCloud Drive...)?
+
+    Nothing of ours may live directly there: it is where everything else in the
+    drive is, and Drive can "restore" stray files there long after we move them.
+    """
+    path = Path(path).expanduser()
+    try:
+        path = path.resolve()
+    except OSError:
+        pass
+    text = path.as_posix()
+    if text.endswith("/Library/Mobile Documents/com~apple~CloudDocs"):
+        return True
+    if path.parent.name == "CloudStorage" and path.parent.parent.name == "Library":
+        return True  # ~/Library/CloudStorage/GoogleDrive-… (the account folder)
+    if path.anchor and path == Path(path.anchor) and sys.platform == "win32":
+        return is_synced(path) or (path / "My Drive").is_dir()  # G:\ for Drive for desktop
+    name = path.name
+    if name.startswith(("My Drive", "Shared drives")):
+        return True
+    if name.startswith(_SYNCED_NAMES) or name == "Box":
+        return not is_synced(path.parent)
+    return False
+
+
 def check_location(folder: Path, *, hubs: list[Path] = (), songs: list[Path] = ()) -> Verdict:
     """May new songs be put in `folder`?"""
     folder = Path(folder).expanduser()

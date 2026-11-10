@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from sessionsync.auth.identity import load_identity
 from sessionsync.core import locations, osinfo
+from sessionsync.core.errors import CloudRootError
 from sessionsync.core.repository import Repository
 from sessionsync.core.localstate import LocalState
 from sessionsync.ui import hubsync, theme
@@ -242,7 +243,11 @@ class MainWindow(QMainWindow):
             self, "Choose the shared folder (e.g. in Google Drive)"
         )
         if folder:
-            self.settings.add_hub(Path(folder))
+            try:
+                self.settings.add_hub(Path(folder))
+            except CloudRootError as exc:
+                QMessageBox.warning(self, "Choose a folder inside Drive", str(exc))
+                return
             self.start.refresh()
 
     def open_song(self, hub, song: str, *, open_live: bool = False) -> None:
@@ -719,7 +724,11 @@ class MainWindow(QMainWindow):
             self.start.refresh()  # the checklist ticks along as Drive catches up
 
     def _connect_found(self, folder) -> None:
-        self.settings.add_hub(Path(folder))
+        try:
+            self.settings.add_hub(Path(folder))
+        except CloudRootError as exc:
+            osinfo.log(f"refused to connect the top of a cloud drive: {exc}")
+            return
         self.start.refresh()
         self.notifier.show(
             f"Connected {Path(folder).name}. Its songs are listed on the start screen.",

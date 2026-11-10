@@ -17,7 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sessionsync.adapters.ableton.adapter import AbletonAdapter
-from sessionsync.core.errors import NotAProjectError, PartOfASongError
+from sessionsync.core import locations
+from sessionsync.core.errors import CloudRootError, NotAProjectError, PartOfASongError
 from sessionsync.core.hashing import HashCache
 from sessionsync.core.localstate import LocalState
 from sessionsync.core.manifest import Manifest, build_file_map
@@ -114,6 +115,8 @@ def add_local_project(
     shared folder unless the project is valid and the name is free.
     """
     local_folder, hub_folder = Path(local_folder), Path(hub_folder)
+    if locations.is_cloud_root(hub_folder):
+        raise CloudRootError(hub_folder)
     adapter = AbletonAdapter()
     if MasterFolderStorage.song_around(local_folder) is not None or MasterFolderStorage.holds_songs(local_folder):
         raise PartOfASongError(

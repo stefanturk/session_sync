@@ -7,6 +7,17 @@ class SessionSyncError(Exception):
     """Base class for everything this app raises on purpose."""
 
 
+class CloudRootError(SessionSyncError):
+    """A shared folder or song was pointed at the very top of Google Drive (or Dropbox, ...)."""
+
+    def __init__(self, path):
+        self.path = path
+        super().__init__(
+            f"{path} is the top level of a cloud drive. Session Sync never puts anything "
+            "there. Make a folder inside it (for example Song Collaboration) and choose that."
+        )
+
+
 class NotAProjectError(SessionSyncError):
     """The chosen folder is not a project this app can sync."""
 

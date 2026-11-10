@@ -43,7 +43,8 @@ import shutil
 import time
 from pathlib import Path
 
-from sessionsync.core import launcher
+from sessionsync.core import launcher, locations
+from sessionsync.core.errors import CloudRootError
 from sessionsync.core.hashing import hash_file
 from sessionsync.core.manifest import FileEntry, Manifest
 from sessionsync.core.winfiles import open_for_reading
@@ -131,6 +132,8 @@ class MasterFolderStorage:
         return base / disguise(rel_path) if base != self.root else base / rel_path
 
     def _ensure_layout(self) -> None:
+        if locations.is_cloud_root(self.root):
+            raise CloudRootError(self.root)
         for sub in (MANIFESTS_DIR, PRESENCE_DIR):
             (self.meta / sub).mkdir(parents=True, exist_ok=True)
 
