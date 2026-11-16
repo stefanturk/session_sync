@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Build SessionSync.app — a double-clickable Mac app with no Python needed.
 #
-#   scripts/build_app.sh              -> installs into ~/Applications
+#   scripts/build_app.sh              -> installs into /Applications (~/Applications if that isn't writable)
 #   scripts/build_app.sh /some/dir    -> somewhere else
 #
-# It installs to ~/Applications rather than leaving the bundle in dist/,
+# It installs to an Applications folder rather than leaving the bundle in dist/,
 # because the Dock pins whichever bundle you dragged from. dist/ is deleted and
 # rebuilt on every run, so a Dock icon pointing there would break the first time
 # you rebuilt — silently, since the Dock keeps showing the icon either way.
@@ -13,10 +13,16 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-dest="${1:-$HOME/Applications}"
+if [ -n "${1:-}" ]; then dest="$1"
+elif [ -w /Applications ]; then dest="/Applications"      # where people look for apps
+else dest="$HOME/Applications"; fi
 app="$dest/SessionSync.app"
 
-python="${PYTHON:-$root/.venv/bin/python}"
+# An existing venv always wins over $PYTHON: Steezy Studio sets PYTHON to its own engine Python on
+# every build, and that has none of this app's packages (PySide6), so using it would build a broken
+# app with a generic icon on a machine that has a working venv.
+python="$root/.venv/bin/python"
+[ -x "$python" ] || python="${PYTHON:-$python}"
 # No venv here? Use the Steezy Studio engine's Python (3.12) if it is installed
 # and this app's packages install into it. An existing venv is always preferred.
 engine_py="${STEEZY_ENGINE_DIR:-$HOME/Library/Application Support/Steezy Studio/engine}/python/bin/python3"
