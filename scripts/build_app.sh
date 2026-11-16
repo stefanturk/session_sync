@@ -42,14 +42,9 @@ if ! "$python" -c "import PyInstaller" 2>/dev/null; then
     "$python" -m pip install --quiet pyinstaller
 fi
 
-# A second copy anywhere else is how the Dock goes stale: it stays pinned to
-# the bundle it was dragged from while only this one gets rebuilt.
-for stray in "/Applications/SessionSync.app" "$HOME/Applications/SessionSync.app"; do
-    if [ "$stray" != "$app" ] && [ -e "$stray" ]; then
-        echo "Removing a stray copy at $stray — the Dock should only point at $app."
-        rm -rf "$stray"
-    fi
-done
+# Shared build helpers (swap an app in with no gap; move a Dock pin before an old copy goes) live in
+# Steezy Studio. Optional: without them this still builds, the plain way.
+_build="${STEEZY_BUILD:-$root/../steezy_studio/build}"
 
 # --- the icon --------------------------------------------------------------
 work="$(mktemp -d)"
@@ -81,9 +76,23 @@ rm -rf build dist
 [ -d "dist/SessionSync.app" ] || { echo "Build produced no bundle." >&2; exit 1; }
 
 mkdir -p "$dest"
-rm -rf "$app"
-mv "dist/SessionSync.app" "$app"
+stage="$dest/.SessionSync.app.building"
+rm -rf "$stage"
+mv "dist/SessionSync.app" "$stage"
 rm -rf build dist
+if [ -f "$_build/appswap.py" ]; then /usr/bin/python3 "$_build/appswap.py" "$stage" "$app"
+else rm -rf "$app"; mv "$stage" "$app"; fi
+
+# A second copy anywhere else is how the Dock goes stale: it stays pinned to the bundle it was dragged
+# from while only this one gets rebuilt. Move its pin to this one first (a pin to a deleted app turns
+# into a question mark), then remove it.
+for stray in "/Applications/SessionSync.app" "$HOME/Applications/SessionSync.app"; do
+    if [ "$stray" != "$app" ] && [ -e "$stray" ]; then
+        echo "Moving $stray to $app - the Dock should only point at one."
+        [ -f "$_build/dock_repin.py" ] && /usr/bin/python3 "$_build/dock_repin.py" "$stray" "$app" || true
+        rm -rf "$stray"
+    fi
+done
 
 # An unsigned app is quarantined on first launch. Signing ad-hoc is enough for
 # the Mac that built it and avoids the "damaged" dialog.
