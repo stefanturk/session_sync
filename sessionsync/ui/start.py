@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +25,12 @@ from sessionsync.ui import hubsync
 from sessionsync.ui.settings import Settings
 
 ROW_HEIGHT = 48
+
+
+def _flex_height(view, rows: int, *, most: int, least: int) -> None:
+    """Let a list be anywhere from `least` to `most` rows tall, as the window allows."""
+    view.setMinimumHeight(min(rows, least) * ROW_HEIGHT + 14)
+    view.setMaximumHeight(min(rows, most) * ROW_HEIGHT + 14)
 
 
 class StartScreen(QWidget):
@@ -49,7 +56,7 @@ class StartScreen(QWidget):
 
     def _build(self) -> None:
         column = QVBoxLayout(self)
-        column.setContentsMargins(64, 48, 64, 44)
+        column.setContentsMargins(36, 28, 36, 24)
         column.setSpacing(10)
         column.addStretch(1)
 
@@ -62,7 +69,7 @@ class StartScreen(QWidget):
         tagline.setObjectName("tagline")
         tagline.setAlignment(Qt.AlignCenter)
         column.addWidget(tagline)
-        column.addSpacing(26)
+        column.addSpacing(16)
 
         self.join_box = QVBoxLayout()
         self.join_box.setSpacing(4)
@@ -79,7 +86,7 @@ class StartScreen(QWidget):
         self.collab.itemClicked.connect(self._song_activated)
         self.collab.setContextMenuPolicy(Qt.CustomContextMenu)
         self.collab.customContextMenuRequested.connect(self._collab_menu)
-        column.addWidget(self.collab)
+        column.addWidget(self.collab, 10)
 
         self.connect_button = QPushButton("CONNECT A SHARED FOLDER…")
         self.connect_button.setToolTip(
@@ -121,7 +128,7 @@ class StartScreen(QWidget):
         self.recent.itemClicked.connect(self._chosen)
         self.recent.setContextMenuPolicy(Qt.CustomContextMenu)
         self.recent.customContextMenuRequested.connect(self._recent_menu)
-        column.addWidget(self.recent)
+        column.addWidget(self.recent, 2)
 
         self.open_button = QPushButton("OPEN PROJECT…")
         self.open_button.setToolTip("Open your copy of a song that is already set up on this computer.")
@@ -155,8 +162,9 @@ class StartScreen(QWidget):
         self.recent.setVisible(not empty)
         self.recent_label.setVisible(not empty)
         if not empty:
-            # Hug the content rather than leaving a tall empty box.
-            self.recent.setFixedHeight(min(len(projects), 5) * ROW_HEIGHT + 14)
+            # Hug the content rather than leaving a tall empty box, but give way to a small
+            # window (2026-11-19: fixed heights made the lists draw over the buttons under them).
+            _flex_height(self.recent, len(projects), most=5, least=2)
 
     def _refresh_collaborators(self) -> None:
         """One block per shared folder, a row per song inside it."""
@@ -203,7 +211,8 @@ class StartScreen(QWidget):
                 rows += 1
         self.collab.setVisible(rows > 0)
         if rows:
-            self.collab.setFixedHeight(min(rows, 8) * ROW_HEIGHT + 14)
+            # Grows with the window up to every song, shrinks to three rows in a small one.
+            _flex_height(self.collab, rows, most=rows, least=3)
 
     def _refresh_join(self) -> None:
         """No shared folder yet: what joining takes, ticked off as it happens."""
@@ -381,6 +390,9 @@ class _SongRow(QWidget):
         top = QHBoxLayout()
         name = QLabel(row.song.name)
         name.setObjectName("recentName")
+        # The name gives way in a narrow window, so the row never runs past the list and hides
+        # Open in Live off its right edge (2026-11-19). The tooltip and song page have it whole.
+        name.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         top.addWidget(name, 1)
         state = QLabel(row.label)
         state.setObjectName("recentPath")
@@ -390,6 +402,7 @@ class _SongRow(QWidget):
         detail = QLabel(_elide(row.detail or "No summary", 80))
         detail.setObjectName("recentPath")
         detail.setTextFormat(Qt.PlainText)
+        detail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         column.addWidget(detail)
 
 
